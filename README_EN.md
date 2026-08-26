@@ -1,6 +1,6 @@
-# Docker_Private_source · One-click Docker install for China networks
+# Docker_Private_Source · One-click Docker install for China networks
 
-[![sync-docker-ce](https://github.com/MinimaxFlora/Docker_Private_source/actions/workflows/sync.yml/badge.svg)](https://github.com/MinimaxFlora/Docker_Private_source/actions/workflows/sync.yml)
+[![sync-docker-ce](https://github.com/MinimaxFlora/Docker_Private_Source/actions/workflows/sync.yml/badge.svg)](https://github.com/MinimaxFlora/Docker_Private_Source/actions/workflows/sync.yml)
 
 [中文](./README.md)
 
@@ -18,7 +18,7 @@ get.docker.com reachability.
 
 ```bash
 # Debian / Ubuntu (amd64 / arm64), latest stable
-sh -c "$(curl -fsSL https://github.com/MinimaxFlora/Docker_Private_source/raw/refs/heads/master/install.sh)"
+sh -c "$(curl -fsSL https://github.com/MinimaxFlora/Docker_Private_Source/raw/refs/heads/master/install.sh)"
 
 # Rocky 9/10, CentOS 7/9/10, RHEL 9/10, AlmaLinux 9/10, Fedora 43/44 (x86_64 / aarch64)
 # the same script auto-detects the distro — no extra flags needed
@@ -27,7 +27,7 @@ sh -c "$(curl -fsSL https://github.com/MinimaxFlora/Docker_Private_source/raw/re
 If GitHub is unreachable, fetch the script from jsDelivr CDN instead:
 
 ```bash
-sh -c "$(curl -fsSL https://testingcf.jsdelivr.net/gh/MinimaxFlora/Docker_Private_source@master/install.sh)"
+sh -c "$(curl -fsSL https://testingcf.jsdelivr.net/gh/MinimaxFlora/Docker_Private_Source@master/install.sh)"
 ```
 
 The script will:

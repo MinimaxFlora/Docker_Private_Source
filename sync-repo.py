@@ -205,6 +205,12 @@ def main():
     os.makedirs(keyring_dir, exist_ok=True)
     if os.path.exists("public-key.asc"):
         shutil.copy("public-key.asc", os.path.join(keyring_dir, "docker-ce-cn.asc"))
+        # 同时生成 binary keyring：apt 的 signed-by 需要 binary 格式，
+        # 且目标机不一定装有 gpg，因此直接打包成品
+        subprocess.run(["gpg", "--batch", "--dearmor", "-o",
+                        os.path.join(keyring_dir, "docker-cn.gpg"),
+                        "public-key.asc"], check=True)
+        log("已生成 binary keyring: keyring/docker-cn.gpg")
     with open("repo-version.txt", "w", encoding="utf-8") as f:
         f.write(f"codename={cn}\n")
         f.write(f"synced={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")

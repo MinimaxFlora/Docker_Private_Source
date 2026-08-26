@@ -194,11 +194,17 @@ info "SHA256 校验通过"
 $sh_c "install -d -m 0755 $REPO_DIR"
 $sh_c "tar -xf $tmpdir/$tar_name -C $REPO_DIR"
 $sh_c "install -d -m 0755 /etc/apt/keyrings"
-if command_exists gpg; then
-    $sh_c "gpg --dearmor < $REPO_DIR/keyring/docker-ce-cn.asc > $KEYRING 2>/dev/null || cp $REPO_DIR/keyring/docker-ce-cn.asc $KEYRING"
+# 优先使用仓库包内置的 binary keyring（apt 的 signed-by 需要 binary 格式，
+# 且不依赖目标机是否装有 gpg）；缺失时才现场转换/兜底
+if [ -f "$REPO_DIR/keyring/docker-cn.gpg" ]; then
+    $sh_c "install -m 0644 $REPO_DIR/keyring/docker-cn.gpg $KEYRING"
+elif command_exists gpg; then
+    $sh_c "gpg --batch --dearmor -o $KEYRING $REPO_DIR/keyring/docker-ce-cn.asc"
 else
     $sh_c "cp $REPO_DIR/keyring/docker-ce-cn.asc $KEYRING"
 fi
+[ -s "$KEYRING" ] || die "仓库公钥安装失败（$KEYRING 为空）"
+info "已安装仓库公钥到 $KEYRING"
 
 if [ -f "$SOURCE_FILE" ]; then
     $sh_c "cp $SOURCE_FILE $SOURCE_FILE.bak.\$(date +%s)"

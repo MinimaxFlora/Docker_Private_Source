@@ -293,9 +293,16 @@ def sync_deb():
     for arch in ARCHS:
         pkg_index = os.path.join(dists_dir, f"binary-{arch}", "Packages")
         os.makedirs(os.path.dirname(pkg_index), exist_ok=True)
+        # 必须用相对路径（相对仓库根）：绝对路径会让 Filename 字段变成
+        # /home/runner/work/.../pool/...，客户端 file: 源拼接后找不到文件
         with open(pkg_index, "w", encoding="utf-8") as f:
-            subprocess.run(["apt-ftparchive", "packages", os.path.join(pool_root, arch)],
+            subprocess.run(["apt-ftparchive", "packages", f"pool/stable/{arch}"],
                            stdout=f, check=True)
+        # 自检：Filename 必须是相对路径
+        with open(pkg_index, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("Filename: /"):
+                    raise SystemExit(f"索引错误: Filename 为绝对路径: {line.strip()}")
         with open(pkg_index, "rb") as fi, gzip.open(pkg_index + ".gz", "wb") as fo:
             fo.write(fi.read())
         log(f"生成索引: {pkg_index}.gz")

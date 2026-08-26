@@ -351,6 +351,17 @@ do_install_rpm() {
     download_and_verify "$tar_name"
 
     # ---------- 安装 yum/dnf 源（file:// 本地仓库） ----------
+    # 包管理器需在 repo 文件生成前确定：
+    #   dnf（Rocky/RHEL 9+/Fedora）完整支持 gpgkey=file:// 的 repo_gpgcheck；
+    #   yum 3.4（CentOS 7）无法从 file:// 加载 gpgkey（实测 "Gpg Keys not
+    #   imported"），必须关闭 repo_gpgcheck，否则仓库被 yum 直接拒绝
+    if command_exists dnf; then
+        pm="dnf"
+        repo_gpgcheck=1
+    else
+        pm="yum"
+        repo_gpgcheck=0
+    fi
     $sh_c "install -d -m 0755 $REPO_DIR"
     $sh_c "tar -xf $tmpdir/$tar_name -C $REPO_DIR"
     cat > "$tmpdir/docker-cn.repo" <<REPO
@@ -359,7 +370,7 @@ name=Docker CE (docker-install-cn)
 baseurl=file://$REPO_DIR/Packages
 enabled=1
 gpgcheck=0
-repo_gpgcheck=1
+repo_gpgcheck=$repo_gpgcheck
 gpgkey=file://$REPO_DIR/keyring/docker-cn.asc
 REPO
     # 备份移出 yum.repos.d（dnf 对非 .repo 扩展名会告警），并清理历史残留备份
@@ -370,14 +381,13 @@ REPO
     fi
     $sh_c "install -m 0644 $tmpdir/docker-cn.repo $RPM_REPO_FILE"
     $sh_c "rpm --import $REPO_DIR/keyring/docker-cn.asc 2>/dev/null || true"
-    info "已配置 $RPM_REPO_FILE（repo_gpgcheck=1 校验仓库签名）"
+    if [ "$repo_gpgcheck" = "1" ]; then
+        info "已配置 $RPM_REPO_FILE（repo_gpgcheck=1 校验仓库签名）"
+    else
+        info "已配置 $RPM_REPO_FILE（yum 3.4 兼容模式，仓库签名校验已关闭）"
+    fi
 
     # ---------- 安装 Docker ----------
-    if command_exists dnf; then
-        pm="dnf"
-    else
-        pm="yum"
-    fi
     # 只安装仓库中实际存在的包（各发行版包集合略有差异）
     names="$($sh_c "ls $REPO_DIR/Packages/*.rpm 2>/dev/null | sed 's#.*/##; s/-[0-9].*//' | sort -u" 2>/dev/null || true)"
     pkgs=""

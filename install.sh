@@ -2,10 +2,15 @@
 # =============================================================================
 # docker-ce-cn —— 国内一键安装 Docker Engine
 #
-# 仓库（apt 源）由 GitHub Actions 同步官方 docker-ce 并重签名后，
+# 仓库（apt / yum 源）由 GitHub Actions 同步官方 docker-ce 并重签名后，
 # 经 GitHub Release + ghproxy 等加速通道分发，本脚本负责：
-#   下载并校验仓库包 → 配置本地 apt 源 → 安装 docker-ce 全家桶
+#   下载并校验仓库包 → 配置本地 apt / yum 源 → 安装 docker-ce 全家桶
 #   → 自动启动服务 → 加入 docker 组 → 配置国内 registry 镜像加速
+#
+# 支持:
+#   Debian 11/12/13 (bullseye/bookworm/trixie)、Ubuntu 20.04/22.04/24.04
+#   (focal/jammy/noble)、CentOS 7/9/10、Rocky Linux 9/10、RHEL 9/10、
+#   AlmaLinux 9/10、Fedora 43/44（amd64 / arm64）
 #
 # 用法:
 #   # 默认安装最新稳定版
@@ -13,10 +18,10 @@
 #
 #   # 下载后执行（支持参数）
 #   curl -fsSL https://github.com/MinimaxFlora/Docker_Private_source/raw/refs/heads/master/install.sh -o install.sh
-#   sudo bash install.sh --version 27.3
+#   sudo bash install.sh --version 29.7
 #
 # 参数:
-#   --version <VERSION>        指定 docker-ce 版本（如 27.3 或 27.3.1）
+#   --version <VERSION>        指定 docker-ce 版本（如 29.7 或 29.7.2）
 #   --mirror <URL>             GitHub 加速前缀（默认自动探测多个 ghproxy 镜像）
 #   --registry-mirror <URL>    追加一个 docker 镜像加速地址（可重复）
 #   --channel <stable>         通道，当前仅 stable
@@ -26,7 +31,7 @@
 #   --help                     帮助
 #
 # 环境变量（与参数等效）:
-#   PROJECT=owner/repo  TAG=latest  VERSION=27.3  DOWNLOAD_MIRROR=https://ghfast.top
+#   PROJECT=owner/repo  TAG=latest  VERSION=29.7  DOWNLOAD_MIRROR=https://ghfast.top
 #   REGISTRY_MIRRORS="a.com,b.com"  NO_AUTOSTART=1  NO_REGISTRY_MIRROR=1  DRY_RUN=1
 # =============================================================================
 
@@ -57,9 +62,10 @@ PROJECT="${PROJECT:-MinimaxFlora/Docker_Private_source}"   # 仓库（fork 后�
 TAG="${TAG:-latest}"                                    # Release tag（固定 latest，覆盖更新）
 # GitHub 加速前缀候选（按序尝试；ghproxy 类镜像仅代理 /releases/download/ 下载）
 DEFAULT_MIRRORS="ghfast.top gh-proxy.com ghproxy.net mirror.ghproxy.com gh-proxy.kejizero.xyz"
-REPO_DIR="/opt/docker-ce-cn"                            # 本地 apt 仓库解压目录
+REPO_DIR="/opt/docker-ce-cn"                            # 本地 apt/yum 仓库解压目录
 KEYRING="/etc/apt/keyrings/docker-cn.gpg"
 SOURCE_FILE="/etc/apt/sources.list.d/docker-cn.list"
+RPM_REPO_FILE="/etc/yum.repos.d/docker-cn.repo"
 SUPPORTED_CODENAMES="trixie bookworm bullseye noble jammy focal"
 SUPPORTED_ARCHS="amd64 arm64"
 # 默认 docker pull 镜像加速（时效性强，可用 --registry-mirror 追加）
@@ -76,7 +82,7 @@ DRY_RUN="${DRY_RUN:-0}"
 EXTRA_MIRRORS=""
 
 usage() {
-    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
@@ -143,115 +149,238 @@ download_release_file() {
 }
 
 # ----------------------------- 平台检测 -----------------------------
-if [ "$DRY_RUN" = "1" ]; then
-    echo "# --dry-run 模式：以下为将要执行的步骤 --"
-fi
-
 # 用子 shell 读取 os-release，避免其 VERSION 字段（如 Debian 的 "12 (bookworm)"）
 # 污染本脚本的 --version 参数变量 VERSION
 [ -r /etc/os-release ] || die "无法读取 /etc/os-release"
 lsb_dist="$(. /etc/os-release && printf '%s' "${ID:-}")"
-dist_version="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
-if [ -z "$dist_version" ] && command_exists lsb_release; then
-    dist_version="$(lsb_release --codename 2>/dev/null | cut -f2 || true)"
-fi
-arch="$(dpkg --print-architecture 2>/dev/null || true)"
+ver_id="$(. /etc/os-release && printf '%s' "${VERSION_ID:-}")"
 
 case "$lsb_dist" in
-    debian|ubuntu) ;;
-    *) die "不支持的发行版: '$lsb_dist'（本项目仅支持 Debian / Ubuntu）" ;;
+    debian|ubuntu) PKG_KIND=deb ;;
+    centos|rocky|rhel|almalinux|fedora) PKG_KIND=rpm ;;
+    *) die "不支持的发行版: '$lsb_dist'（支持: Debian/Ubuntu、Rocky/CentOS/RHEL/AlmaLinux/Fedora）" ;;
 esac
-case " $SUPPORTED_CODENAMES " in
-    *" $dist_version "*) ;;
-    *) die "不支持的版本: '$dist_version'（支持: $SUPPORTED_CODENAMES）" ;;
-esac
-case " $SUPPORTED_ARCHS " in
-    *" $arch "*) ;;
-    *) die "不支持的架构: '$arch'（支持: $SUPPORTED_ARCHS）" ;;
-esac
-info "检测到 ${lsb_dist} ${dist_version} / ${arch}"
+
+if [ "$PKG_KIND" = "deb" ]; then
+    dist_version="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+    if [ -z "$dist_version" ] && command_exists lsb_release; then
+        dist_version="$(lsb_release --codename 2>/dev/null | cut -f2 || true)"
+    fi
+    arch="$(dpkg --print-architecture 2>/dev/null || true)"
+    case " $SUPPORTED_CODENAMES " in
+        *" $dist_version "*) ;;
+        *) die "不支持的版本: '$dist_version'（支持: $SUPPORTED_CODENAMES）" ;;
+    esac
+    case " $SUPPORTED_ARCHS " in
+        *" $arch "*) ;;
+        *) die "不支持的架构: '$arch'（支持: $SUPPORTED_ARCHS）" ;;
+    esac
+    info "检测到 ${lsb_dist} ${dist_version} / ${arch}"
+else
+    case "$lsb_dist" in
+        fedora)
+            case "$ver_id" in
+                43|44) rpm_id="fedora-$ver_id" ;;
+                *) die "不支持的 Fedora 版本: '$ver_id'（支持: 43/44，新版本请先更新同步矩阵）" ;;
+            esac ;;
+        centos|rocky|rhel|almalinux)
+            case "$ver_id" in
+                7*) rpm_id=el7 ;;
+                9*) rpm_id=el9 ;;
+                10*) rpm_id=el10 ;;
+                *) die "不支持的版本: '$lsb_dist $ver_id'（支持: 7/9/10 系）" ;;
+            esac ;;
+    esac
+    arch="$(uname -m 2>/dev/null || true)"
+    case "$arch" in
+        x86_64|aarch64) ;;
+        *) die "不支持的架构: '$arch'（支持: x86_64 / aarch64）" ;;
+    esac
+    info "检测到 ${lsb_dist} ${ver_id} / ${arch}（仓库: $rpm_id）"
+fi
 
 if [ "$DRY_RUN" = "1" ]; then
-    echo "# 1. 下载仓库包 docker-ce-repo-$dist_version.tar 并校验 SHA256"
-    echo "# 2. 解压到 $REPO_DIR"
-    echo "# 3. 安装密钥到 $KEYRING，写入 $SOURCE_FILE"
-    echo "# 4. apt-get update && 安装 docker-ce 全家桶${VERSION:+（版本 $VERSION）}"
-    echo "# 5. systemctl enable --now docker${NO_AUTOSTART:+（已跳过）} + usermod -aG docker"
-    echo "# 6. 配置 registry 镜像加速${NO_REGISTRY_MIRROR:+（已跳过）}"
+    echo "# --dry-run 模式：以下为将要执行的步骤 --"
+    if [ "$PKG_KIND" = "deb" ]; then
+        echo "# 1. 下载仓库包 docker-ce-repo-$dist_version.tar 并校验 SHA256"
+        echo "# 2. 解压到 $REPO_DIR，安装公钥，写入 $SOURCE_FILE（file: apt 源）"
+        echo "# 3. apt-get update && 安装 docker-ce 全家桶${VERSION:+（版本 $VERSION）}"
+    else
+        echo "# 1. 下载仓库包 docker-ce-repo-rpm-$rpm_id.tar 并校验 SHA256"
+        echo "# 2. 解压到 $REPO_DIR，写入 $RPM_REPO_FILE（file:// yum 源）"
+        echo "# 3. dnf/yum install docker-ce 全家桶${VERSION:+（版本 $VERSION）}"
+    fi
+    echo "# 4. systemctl enable --now docker${NO_AUTOSTART:+（已跳过）} + usermod -aG docker"
+    echo "# 5. 配置 registry 镜像加速${NO_REGISTRY_MIRROR:+（已跳过）}"
     exit 0
 fi
 
-# ----------------------------- 下载并校验仓库包 -----------------------------
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
-tar_name="docker-ce-repo-$dist_version.tar"
-info "下载仓库: $tar_name（若网络慢，可 --mirror 指定加速前缀）"
-download_release_file "$tar_name" "$tmpdir/$tar_name" 900 || die "仓库包下载失败，请检查网络或换 --mirror"
-download_release_file "$tar_name.sha256" "$tmpdir/$tar_name.sha256" 60 || die "校验文件下载失败"
 
-expected="$(awk '{print $1}' "$tmpdir/$tar_name.sha256")"
-actual="$(sha256sum "$tmpdir/$tar_name" | awk '{print $1}')"
-[ -n "$expected" ] && [ "$expected" = "$actual" ] || die "SHA256 校验失败（可能下载不完整）"
-info "SHA256 校验通过"
+# ===========================================================================
+# deb 流程（Debian / Ubuntu）
+# ===========================================================================
+do_install_deb() {
+    local tar_name="docker-ce-repo-$dist_version.tar" expected actual
+    info "下载仓库: $tar_name（若网络慢，可 --mirror 指定加速前缀）"
+    download_release_file "$tar_name" "$tmpdir/$tar_name" 900 || die "仓库包下载失败，请检查网络或换 --mirror"
+    download_release_file "$tar_name.sha256" "$tmpdir/$tar_name.sha256" 60 || die "校验文件下载失败"
 
-# ----------------------------- 安装 apt 源 -----------------------------
-$sh_c "install -d -m 0755 $REPO_DIR"
-$sh_c "tar -xf $tmpdir/$tar_name -C $REPO_DIR"
-$sh_c "install -d -m 0755 /etc/apt/keyrings"
-# 优先使用仓库包内置的 binary keyring（apt 的 signed-by 需要 binary 格式，
-# 且不依赖目标机是否装有 gpg）；缺失时才现场转换/兜底
-if [ -f "$REPO_DIR/keyring/docker-cn.gpg" ]; then
-    $sh_c "install -m 0644 $REPO_DIR/keyring/docker-cn.gpg $KEYRING"
-elif command_exists gpg; then
-    $sh_c "gpg --batch --dearmor -o $KEYRING $REPO_DIR/keyring/docker-ce-cn.asc"
-else
-    $sh_c "cp $REPO_DIR/keyring/docker-ce-cn.asc $KEYRING"
-fi
-[ -s "$KEYRING" ] || die "仓库公钥安装失败（$KEYRING 为空）"
-info "已安装仓库公钥到 $KEYRING"
+    expected="$(awk '{print $1}' "$tmpdir/$tar_name.sha256")"
+    actual="$(sha256sum "$tmpdir/$tar_name" | awk '{print $1}')"
+    [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "SHA256 校验失败（可能下载不完整）"
+    info "SHA256 校验通过"
 
-if [ -f "$SOURCE_FILE" ]; then
-    $sh_c "cp $SOURCE_FILE $SOURCE_FILE.bak.\$(date +%s)"
-    info "已备份原 $SOURCE_FILE"
-fi
-# file: 源 —— 无第三方网络依赖，仓库内容来自已校验的本地文件
-$sh_c "echo 'deb [signed-by=$KEYRING] file:$REPO_DIR $dist_version stable' > $SOURCE_FILE"
-
-# ----------------------------- 安装 Docker -----------------------------
-$sh_c "apt-get -qq update" || die "apt-get update 失败"
-pkgs="docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras docker-model-plugin"
-apt_flags="-y -qq"
-
-if [ -n "$VERSION" ]; then
-    info "查找版本 '$VERSION' ..."
-    ver_esc="$(printf '%s' "$VERSION" | sed 's/[.[\*^$]/\\&/g')"
-    pkg_version="$(apt-cache madison docker-ce | awk -v p="^[0-9]+:${ver_esc}" '$2 ~ p {print $2}' | sort -V | tail -1 || true)"
-    if [ -z "$pkg_version" ]; then
-        echo "错误: 仓库中未找到 docker-ce 版本 '$VERSION'，可用版本:" >&2
-        apt-cache madison docker-ce | head -15 >&2 || true
-        exit 1
+    # ---------- 安装 apt 源 ----------
+    $sh_c "install -d -m 0755 $REPO_DIR"
+    $sh_c "tar -xf $tmpdir/$tar_name -C $REPO_DIR"
+    $sh_c "install -d -m 0755 /etc/apt/keyrings"
+    # 优先使用仓库包内置的 binary keyring（apt 的 signed-by 需要 binary 格式，
+    # 且不依赖目标机是否装有 gpg）；缺失时才现场转换/兜底
+    if [ -f "$REPO_DIR/keyring/docker-cn.gpg" ]; then
+        $sh_c "install -m 0644 $REPO_DIR/keyring/docker-cn.gpg $KEYRING"
+    elif command_exists gpg; then
+        $sh_c "gpg --batch --dearmor -o $KEYRING $REPO_DIR/keyring/docker-ce-cn.asc"
+    else
+        $sh_c "cp $REPO_DIR/keyring/docker-ce-cn.asc $KEYRING"
     fi
-    cli_pkg_version="$(apt-cache madison docker-ce-cli | awk -v p="^[0-9]+:${ver_esc}" '$2 ~ p {print $2}' | sort -V | tail -1 || true)"
-    pkgs="docker-ce=$pkg_version"
-    [ -n "$cli_pkg_version" ] && pkgs="$pkgs docker-ce-cli=$cli_pkg_version"
-    pkgs="$pkgs containerd.io docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras docker-model-plugin"
-    apt_flags="$apt_flags --allow-downgrades"
-    info "安装 $pkgs"
-else
-    info "安装最新稳定版: $pkgs"
-fi
+    [ -s "$KEYRING" ] || die "仓库公钥安装失败（$KEYRING 为空）"
+    info "已安装仓库公钥到 $KEYRING"
 
-$sh_c "DEBIAN_FRONTEND=noninteractive apt-get $apt_flags install $pkgs" || die "安装失败"
+    if [ -f "$SOURCE_FILE" ]; then
+        $sh_c "cp $SOURCE_FILE $SOURCE_FILE.bak.$(date +%s)"
+        info "已备份原 $SOURCE_FILE"
+    fi
+    # file: 源 —— 无第三方网络依赖，仓库内容来自已校验的本地文件
+    $sh_c "echo 'deb [signed-by=$KEYRING] file:$REPO_DIR $dist_version stable' > $SOURCE_FILE"
 
-if [ -f "$REPO_DIR/repo-version.txt" ]; then
-    echo "----------------------------------------"
-    echo "仓库同步信息（$REPO_DIR/repo-version.txt）:"
-    cat "$REPO_DIR/repo-version.txt"
-    echo "----------------------------------------"
-fi
+    # ---------- 安装 Docker ----------
+    $sh_c "apt-get -qq update" || die "apt-get update 失败"
+    local pkgs="docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras docker-model-plugin"
+    local apt_flags="-y -qq"
 
-# ----------------------------- 启动服务 + 加入 docker 组 -----------------------------
-if [ "$NO_AUTOSTART" != "1" ]; then
+    if [ -n "$VERSION" ]; then
+        info "查找版本 '$VERSION' ..."
+        local ver_esc pkg_version cli_pkg_version
+        ver_esc="$(printf '%s' "$VERSION" | sed 's/[.[\\*^$]/\\&/g')"
+        pkg_version="$(apt-cache madison docker-ce | awk -v p="^[0-9]+:${ver_esc}" '$2 ~ p {print $2}' | sort -V | tail -1 || true)"
+        if [ -z "$pkg_version" ]; then
+            echo "错误: 仓库中未找到 docker-ce 版本 '$VERSION'，可用版本:" >&2
+            apt-cache madison docker-ce | head -15 >&2 || true
+            exit 1
+        fi
+        cli_pkg_version="$(apt-cache madison docker-ce-cli | awk -v p="^[0-9]+:${ver_esc}" '$2 ~ p {print $2}' | sort -V | tail -1 || true)"
+        pkgs="docker-ce=$pkg_version"
+        [ -n "$cli_pkg_version" ] && pkgs="$pkgs docker-ce-cli=$cli_pkg_version"
+        pkgs="$pkgs containerd.io docker-buildx-plugin docker-compose-plugin docker-ce-rootless-extras docker-model-plugin"
+        apt_flags="$apt_flags --allow-downgrades"
+        info "安装 $pkgs"
+    else
+        info "安装最新稳定版: $pkgs"
+    fi
+
+    $sh_c "DEBIAN_FRONTEND=noninteractive apt-get $apt_flags install $pkgs" || die "安装失败"
+
+    if [ -f "$REPO_DIR/repo-version.txt" ]; then
+        echo "----------------------------------------"
+        echo "仓库同步信息（$REPO_DIR/repo-version.txt）:"
+        cat "$REPO_DIR/repo-version.txt"
+        echo "----------------------------------------"
+    fi
+}
+
+# ===========================================================================
+# rpm 流程（CentOS / Rocky / RHEL / AlmaLinux / Fedora）
+# ===========================================================================
+do_install_rpm() {
+    local tar_name="docker-ce-repo-rpm-$rpm_id.tar" expected actual names pkgs pinned hit n pm
+    info "下载仓库: $tar_name（若网络慢，可 --mirror 指定加速前缀）"
+    download_release_file "$tar_name" "$tmpdir/$tar_name" 900 || die "仓库包下载失败，请检查网络或换 --mirror"
+    download_release_file "$tar_name.sha256" "$tmpdir/$tar_name.sha256" 60 || die "校验文件下载失败"
+
+    expected="$(awk '{print $1}' "$tmpdir/$tar_name.sha256")"
+    actual="$(sha256sum "$tmpdir/$tar_name" | awk '{print $1}')"
+    [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "SHA256 校验失败（可能下载不完整）"
+    info "SHA256 校验通过"
+
+    # ---------- 安装 yum/dnf 源（file:// 本地仓库） ----------
+    $sh_c "install -d -m 0755 $REPO_DIR"
+    $sh_c "tar -xf $tmpdir/$tar_name -C $REPO_DIR"
+    cat > "$tmpdir/docker-cn.repo" <<REPO
+[docker-cn]
+name=Docker CE (docker-install-cn)
+baseurl=file://$REPO_DIR/Packages
+enabled=1
+gpgcheck=0
+repo_gpgcheck=1
+gpgkey=file://$REPO_DIR/keyring/docker-cn.asc
+REPO
+    if [ -f "$RPM_REPO_FILE" ]; then
+        $sh_c "cp $RPM_REPO_FILE $RPM_REPO_FILE.bak.$(date +%s)"
+        info "已备份原 $RPM_REPO_FILE"
+    fi
+    $sh_c "install -m 0644 $tmpdir/docker-cn.repo $RPM_REPO_FILE"
+    $sh_c "rpm --import $REPO_DIR/keyring/docker-cn.asc 2>/dev/null || true"
+    info "已配置 $RPM_REPO_FILE（repo_gpgcheck=1 校验仓库签名）"
+
+    # ---------- 安装 Docker ----------
+    if command_exists dnf; then
+        pm="dnf"
+    else
+        pm="yum"
+    fi
+    # 只安装仓库中实际存在的包（各发行版包集合略有差异）
+    names="$($sh_c "ls $REPO_DIR/Packages/*.rpm 2>/dev/null | sed 's#.*/##; s/-[0-9].*//' | sort -u" 2>/dev/null || true)"
+    pkgs=""
+    for n in docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin docker-ce-rootless-extras docker-model-plugin; do
+        case " $names " in
+            *" $n "*) pkgs="$pkgs $n" ;;
+        esac
+    done
+    [ -n "$pkgs" ] || die "仓库中未找到任何 docker 包（同步可能不完整）"
+
+    if [ -n "$VERSION" ]; then
+        info "查找版本 '$VERSION' ..."
+        hit="$($sh_c "ls $REPO_DIR/Packages/docker-ce-${VERSION}* 2>/dev/null | head -1" || true)"
+        if [ -z "$hit" ]; then
+            echo "错误: 仓库中未找到 docker-ce 版本 '$VERSION'，可用版本:" >&2
+            $sh_c "ls $REPO_DIR/Packages/ | grep '^docker-ce-[0-9]' | head -15" >&2 || true
+            exit 1
+        fi
+        pinned=""
+        for n in $pkgs; do
+            case "$n" in
+                docker-ce|docker-ce-cli) pinned="$pinned $n-${VERSION}*" ;;
+                *) pinned="$pinned $n" ;;
+            esac
+        done
+        pkgs="$pinned"
+        info "安装 $pkgs"
+    else
+        info "安装最新稳定版: $pkgs"
+    fi
+
+    # file:// 仓库内容每次同步都会变，强制过期元数据缓存
+    $sh_c "$pm clean expire-cache 2>/dev/null || true"
+    $sh_c "$pm -y install $pkgs" || die "安装失败"
+
+    if [ -f "$REPO_DIR/repo-version.txt" ]; then
+        echo "----------------------------------------"
+        echo "仓库同步信息（$REPO_DIR/repo-version.txt）:"
+        cat "$REPO_DIR/repo-version.txt"
+        echo "----------------------------------------"
+    fi
+}
+
+# ===========================================================================
+# 公共收尾：启动服务 / docker 组 / registry 镜像加速 / 汇总
+# ===========================================================================
+enable_docker_service() {
+    if [ "$NO_AUTOSTART" = "1" ]; then
+        info "已跳过自动启动（--no-autostart）"
+        return
+    fi
     if command_exists systemctl; then
         if $sh_c "systemctl enable --now docker 2>/dev/null"; then
             info "docker 服务已启用并启动"
@@ -261,17 +390,21 @@ if [ "$NO_AUTOSTART" != "1" ]; then
     else
         warn "未检测到 systemd，跳过自动启动"
     fi
-else
-    info "已跳过自动启动（--no-autostart）"
-fi
+}
 
-if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
-    $sh_c "usermod -aG docker '$SUDO_USER'" 2>/dev/null || true
-    info "已将用户 $SUDO_USER 加入 docker 组，重新登录后免 sudo 使用 docker"
-fi
+add_to_docker_group() {
+    if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+        $sh_c "usermod -aG docker '$SUDO_USER'" 2>/dev/null || true
+        info "已将用户 $SUDO_USER 加入 docker 组，重新登录后免 sudo 使用 docker"
+    fi
+}
 
-# ----------------------------- registry 镜像加速 -----------------------------
-if [ "$NO_REGISTRY_MIRROR" != "1" ]; then
+configure_registry_mirrors() {
+    local mirrors daemon_json mirrors_json m
+    if [ "$NO_REGISTRY_MIRROR" = "1" ]; then
+        info "已跳过 registry 镜像加速（--no-registry-mirror）"
+        return
+    fi
     mirrors="$DEFAULT_REGISTRY_MIRRORS $EXTRA_MIRRORS"
     [ -n "$REGISTRY_MIRRORS" ] && mirrors="$mirrors $(printf '%s' "$REGISTRY_MIRRORS" | tr ',' ' ')"
     mirrors="$(printf '%s\n' $mirrors | awk 'NF' | sort -u | tr '\n' ' ')"
@@ -279,7 +412,7 @@ if [ "$NO_REGISTRY_MIRROR" != "1" ]; then
         info "配置 registry 镜像加速: $mirrors"
         $sh_c "install -d -m 0755 /etc/docker"
         daemon_json="/etc/docker/daemon.json"
-        [ -f "$daemon_json" ] && $sh_c "cp $daemon_json $daemon_json.bak.\$(date +%s)" && info "已备份原 $daemon_json"
+        [ -f "$daemon_json" ] && $sh_c "cp $daemon_json $daemon_json.bak.$(date +%s)" && info "已备份原 $daemon_json"
         if command_exists python3; then
             # python3 合并（保留原配置，去重追加 registry-mirrors）
             cat > "$tmpdir/merge-daemon.py" <<PYEOF
@@ -320,22 +453,36 @@ PYEOF
             info "已重启 docker 使加速生效"
         fi
     fi
-else
-    info "已跳过 registry 镜像加速（--no-registry-mirror）"
-fi
+}
 
-# ----------------------------- 完成 -----------------------------
-echo
-echo "================================================================================"
-echo "  Docker 安装完成！"
-if command_exists docker; then
-    set +e
-    docker version 2>/dev/null
-    set -e
+print_summary() {
+    echo
+    echo "================================================================================="
+    echo "  Docker 安装完成！"
+    if command_exists docker; then
+        set +e
+        docker version 2>/dev/null
+        set -e
+    fi
+    echo
+    echo "  - 仓库:  $PROJECT (tag: $TAG)"
+    if [ "$PKG_KIND" = "deb" ]; then
+        echo "  - 发行版: ${lsb_dist} ${dist_version} / ${arch}"
+    else
+        echo "  - 发行版: ${lsb_dist} ${ver_id} / ${arch}（仓库: $rpm_id）"
+    fi
+    echo "  - 提示:  非 root 用户需重新登录后生效 docker 组权限"
+    echo "  - 加速:  /etc/docker/daemon.json 中的 registry-mirrors 可随时增删"
+    echo "================================================================================="
+}
+
+# ----------------------------- 执行 -----------------------------
+if [ "$PKG_KIND" = "deb" ]; then
+    do_install_deb
+else
+    do_install_rpm
 fi
-echo
-echo "  - 仓库:  $PROJECT (tag: $TAG)"
-echo "  - 发行版: ${lsb_dist} ${dist_version} / ${arch}"
-echo "  - 提示:  非 root 用户需重新登录后生效 docker 组权限"
-echo "  - 加速:  /etc/docker/daemon.json 中的 registry-mirrors 可随时增删"
-echo "================================================================================"
+enable_docker_service
+add_to_docker_group
+configure_registry_mirrors
+print_summary

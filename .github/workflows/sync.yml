@@ -2,7 +2,7 @@ name: sync-docker-ce
 
 on:
   schedule:
-    - cron: "23 2 * * 1"        # 每周一 02:23 UTC
+    - cron: "23 2 * * *"        # 每天 02:23 UTC（北京时间 10:23）
   workflow_dispatch:
     inputs:
       keep_versions:
@@ -15,8 +15,8 @@ permissions:
   contents: write
 
 jobs:
-  sync:
-    name: sync-${{ matrix.codename }}
+  sync-deb:
+    name: deb-${{ matrix.codename }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -63,3 +63,57 @@ jobs:
             "docker-ce-repo-$CN.tar" "docker-ce-repo-$CN.tar.sha256" \
             --repo "$GITHUB_REPOSITORY" --clobber
 
+  sync-rpm:
+    name: rpm-${{ matrix.id }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 官方 rocky/rhel 目录不发布 docker-ce（rocky 仅插件包），
+          # el7/el9/el10 统一取 centos 源的 el 系 rpm，Rocky/CentOS/RHEL/Alma 通用
+          - { distro: centos, version: "7",  id: el7 }
+          - { distro: centos, version: "9",  id: el9 }
+          - { distro: centos, version: "10", id: el10 }
+          - { distro: fedora, version: "44", id: fedora-44 }
+          - { distro: fedora, version: "43", id: fedora-43 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y gnupg createrepo-c python3-zstandard
+
+      - name: 导入签名私钥
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --yes --import
+            gpg --batch --list-secret-keys --keyid-format long
+          else
+            echo "::warning::未配置 GPG_PRIVATE_KEY，将跳过签名（dnf 校验将失败）"
+          fi
+
+      - name: 同步官方仓库 + 重签名 + 打包
+        env:
+          RPM_DISTRO: ${{ matrix.distro }}
+          RPM_VERSION: ${{ matrix.version }}
+          RPM_ID: ${{ matrix.id }}
+          KEEP_VERSIONS: ${{ github.event.inputs.keep_versions || '3' }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: python3 sync-repo.py
+
+      - name: 上传 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ID="${{ matrix.id }}"
+          gh release create latest --repo "$GITHUB_REPOSITORY" \
+            --title "docker-ce-cn 仓库同步" \
+            --notes "自动同步 docker-ce 官方仓库（rpm: $ID），GPG 重签名" 2>/dev/null || true
+          gh release upload latest \
+            "docker-ce-repo-rpm-$ID.tar" "docker-ce-repo-rpm-$ID.tar.sha256" \
+            --repo "$GITHUB_REPOSITORY" --clobber

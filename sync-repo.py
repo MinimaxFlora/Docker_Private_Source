@@ -2,15 +2,24 @@
 """
 docker-ce 仓库同步与重签名脚本（在 GitHub Actions 中运行）
 
-流程：
+deb 模式（环境变量 CODENAME）:
 1. 从 download.docker.com 拉取指定 codename 的 amd64/arm64 官方包索引
 2. 筛选 docker-ce 家族包，每包保留最新 KEEP 个版本，下载 .deb 到 pool/
 3. 用 apt-ftparchive 重新生成 dists/<codename>/stable/binary-<arch>/{Packages,Packages.gz}
 4. 生成 dists/<codename>/Release，并用本项目 GPG 私钥签名（InRelease / Release.gpg）
 5. 打包 docker-ce-repo-<codename>.tar + .sha256 校验文件
 
+rpm 模式（环境变量 RPM_DISTRO / RPM_VERSION / RPM_ID）:
+1. 解析 download.docker.com 的 rpm 仓库 repomd.xml → primary.xml（zstd 解压）
+2. 筛选 docker-ce 家族包，每包保留最新 KEEP 个版本，下载 .rpm 到 <id>/Packages/
+3. 用 createrepo_c 生成 repodata，GPG 签名 repomd.xml（repomd.xml.asc）
+4. 打包 docker-ce-repo-rpm-<id>.tar + .sha256 校验文件
+
 环境变量:
-  CODENAME          发行版代号（必填，如 bookworm / noble）
+  CODENAME          发行版代号（deb 模式必填，如 bookworm / noble）
+  RPM_DISTRO        rpm 上游发行版（centos / fedora）
+  RPM_VERSION       rpm 上游版本（7 / 9 / 10 / 44 / 43）
+  RPM_ID            目标标识（el7 / el9 / el10 / fedora-44 / fedora-43）
   KEEP_VERSIONS     每个包保留的版本数（默认 3）
   GPG_PASSPHRASE    签名密钥口令（密钥无口令时留空）
   GPG_KEY_ID        签名密钥 ID（默认自动探测第一个私钥）
@@ -25,6 +34,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
 
 UPSTREAM = "https://download.docker.com/linux"
 PACKAGES = [
@@ -37,11 +47,16 @@ PACKAGES = [
     "docker-model-plugin",
 ]
 ARCHS = ["amd64", "arm64"]
+RPM_ARCHS = ["x86_64", "aarch64"]
 # codename -> 上游发行版
 DISTRO = {
     "trixie": "debian", "bookworm": "debian", "bullseye": "debian",
     "noble": "ubuntu", "jammy": "ubuntu", "focal": "ubuntu",
 }
+# rpm 常用命名空间
+NS_REPO = "{http://linux.duke.edu/metadata/repo}"
+NS_COMMON = "{http://linux.duke.edu/metadata/common}"
+NS_RPM = "{http://linux.duke.edu/metadata/rpm}"
 KEEP = int(os.environ.get("KEEP_VERSIONS", "3"))
 UA = "docker-ce-cn-sync/1.0"
 
@@ -111,7 +126,116 @@ def detect_keyid():
     return None
 
 
-def main():
+def gpg_base(keyid):
+    base = ["gpg", "--batch", "--yes", "--pinentry-mode", "loopback",
+            "--local-user", keyid]
+    if os.environ.get("GPG_PASSPHRASE"):
+        base += ["--passphrase", os.environ["GPG_PASSPHRASE"]]
+    return base
+
+
+# ---------------------------------------------------------------------------
+# rpm 版本比较（纯 Python，语义对齐 rpm/dpkg：~ 最低、字母 < 数字、先耗尽者小）
+# ---------------------------------------------------------------------------
+_RANK = {"~": 0, None: 1, "a": 2, "n": 3}
+
+
+def _tokens(s):
+    """把版本串切分为 token 序列：('~',) / ('a', str) / ('n', int)"""
+    toks = []
+    i, n = 0, len(s)
+    while i < n:
+        c = s[i]
+        if c == "~":
+            toks.append(("~",))
+            i += 1
+        elif c in ".-":
+            i += 1
+        elif c.isdigit():
+            j = i
+            while j < n and s[j].isdigit():
+                j += 1
+            toks.append(("n", int(s[i:j])))
+            i = j
+        else:
+            j = i
+            while j < n and s[j].isalpha():
+                j += 1
+            toks.append(("a", s[i:j]))
+            i = j
+    return toks
+
+
+def _cmp_tokseq(a, b):
+    for i in range(max(len(a), len(b))):
+        ta = a[i] if i < len(a) else None
+        tb = b[i] if i < len(b) else None
+        ra, rb = _RANK[ta[0] if ta else None], _RANK[tb[0] if tb else None]
+        if ra != rb:
+            return -1 if ra < rb else 1
+        if ta is None or ta[0] == "~":
+            continue
+        if ta[1] != tb[1]:
+            return -1 if ta[1] < tb[1] else 1
+    return 0
+
+
+def rpm_verkey(epoch, ver, rel):
+    """返回可比较的元组 (epoch, 上游 token, release token)"""
+    return (int(epoch or "0"), _tokens(ver), _tokens(rel))
+
+
+def cmp_rpm_versions(a, b):
+    """a、b 为 rpm_verkey 元组，返回 -1/0/1（a < b 为 -1）"""
+    if a[0] != b[0]:
+        return -1 if a[0] < b[0] else 1
+    c = _cmp_tokseq(a[1], b[1])
+    if c:
+        return c
+    return _cmp_tokseq(a[2], b[2])
+
+
+def rpm_repomd(base):
+    """获取 rpm 仓库 primary 解析树。base 形如 .../linux/centos/9/x86_64/stable"""
+    repomd = fetch(f"{base}/repodata/repomd.xml")
+    root = ET.fromstring(repomd)
+    href = root.find(f"{NS_REPO}data[@type='primary']/{NS_REPO}location").attrib["href"]
+    primary = fetch(f"{base}/{href}")
+    try:
+        import zstandard
+        xml = zstandard.ZstdDecompressor().decompressobj().decompress(primary)
+    except ImportError:
+        raise SystemExit("缺少 zstandard 库（rpm 模式需要），请先: pip install zstandard")
+    return ET.fromstring(xml)
+
+
+def parse_rpm_packages(root):
+    """解析 primary.xml 的 package 列表"""
+    out = []
+    for pkg in root.findall(f"{NS_COMMON}package"):
+        name_el = pkg.find(f"{NS_COMMON}name")
+        ver_el = pkg.find(f"{NS_COMMON}version")
+        loc_el = pkg.find(f"{NS_COMMON}location")
+        if name_el is None or ver_el is None or loc_el is None:
+            continue
+        chk = pkg.find(f"{NS_COMMON}checksum")
+        arch_el = pkg.find(f"{NS_COMMON}arch")
+        out.append({
+            "name": name_el.text,
+            "epoch": ver_el.attrib.get("epoch", "0"),
+            "ver": ver_el.attrib.get("ver", ""),
+            "rel": ver_el.attrib.get("rel", ""),
+            "loc": loc_el.attrib.get("href", ""),
+            "sha256": chk.text if chk is not None and chk.attrib.get("type") == "sha256" else "",
+            "arch": arch_el.text if arch_el is not None else "",
+        })
+    return out
+
+
+# ---------------------------------------------------------------------------
+# deb 模式
+# ---------------------------------------------------------------------------
+def sync_deb():
     cn = os.environ.get("CODENAME", "").strip()
     if cn not in DISTRO:
         raise SystemExit(f"CODENAME 无效: {cn!r}，支持: {', '.join(DISTRO)}")
@@ -188,14 +312,11 @@ def main():
     # ---------- GPG 签名 ----------
     keyid = os.environ.get("GPG_KEY_ID") or detect_keyid()
     if keyid:
-        gpg_base = ["gpg", "--batch", "--yes", "--pinentry-mode", "loopback",
-                    "--local-user", keyid]
-        if os.environ.get("GPG_PASSPHRASE"):
-            gpg_base += ["--passphrase", os.environ["GPG_PASSPHRASE"]]
-        subprocess.run(gpg_base + ["--clearsign", "-o", os.path.join("dists", cn, "InRelease"),
-                                   os.path.join("dists", cn, "Release")], check=True)
-        subprocess.run(gpg_base + ["-abs", "-o", os.path.join("dists", cn, "Release.gpg"),
-                                   os.path.join("dists", cn, "Release")], check=True)
+        gpg_base_cmd = gpg_base(keyid)
+        subprocess.run(gpg_base_cmd + ["--clearsign", "-o", os.path.join("dists", cn, "InRelease"),
+                                       os.path.join("dists", cn, "Release")], check=True)
+        subprocess.run(gpg_base_cmd + ["-abs", "-o", os.path.join("dists", cn, "Release.gpg"),
+                                       os.path.join("dists", cn, "Release")], check=True)
         log(f"已用 {keyid} 签名 InRelease / Release.gpg")
     else:
         log("!! 未找到 GPG 私钥，跳过签名（仓库将无法通过 apt 校验）")
@@ -227,6 +348,114 @@ def main():
         f.write(f"{sha256_file(tar_name)}  {tar_name}\n")
     size_mb = os.path.getsize(tar_name) / 1048576
     log(f"完成: {tar_name} ({size_mb:.1f} MB)")
+
+
+# ---------------------------------------------------------------------------
+# rpm 模式
+# ---------------------------------------------------------------------------
+def sync_rpm():
+    distro = os.environ.get("RPM_DISTRO", "").strip()
+    version = os.environ.get("RPM_VERSION", "").strip()
+    rid = os.environ.get("RPM_ID", "").strip()
+    if not (distro and version and rid):
+        raise SystemExit("rpm 模式需要 RPM_DISTRO / RPM_VERSION / RPM_ID")
+    if distro not in ("centos", "fedora"):
+        raise SystemExit(f"RPM_DISTRO 无效: {distro!r}，支持: centos / fedora")
+
+    root = os.path.abspath(".")
+    repo_root = os.path.join(root, rid)            # <id>/Packages/*.rpm + repodata/
+    pkg_dir = os.path.join(repo_root, "Packages")
+    os.makedirs(pkg_dir, exist_ok=True)
+    latest = {}
+    downloaded = skipped = 0
+    ok_arches = 0
+
+    for arch in RPM_ARCHS:
+        base = f"{UPSTREAM}/{distro}/{version}/{arch}/stable"
+        try:
+            log(f"拉取 rpm 索引: {base}/repodata/repomd.xml")
+            proot = rpm_repomd(base)
+        except Exception as e:
+            log(f"!! {arch} 索引拉取失败（跳过该架构）: {e}")
+            continue
+        pkgs = parse_rpm_packages(proot)
+        wanted = {p: [] for p in PACKAGES}
+        for r in pkgs:
+            if r["name"] in wanted and r["loc"] and r["sha256"] and r["arch"] == arch:
+                wanted[r["name"]].append(r)
+        latest[arch] = {}
+        for name in PACKAGES:
+            cands = sorted(wanted[name],
+                           key=lambda r: rpm_verkey(r["epoch"], r["ver"], r["rel"]),
+                           reverse=True)
+            latest[arch][name] = f"{cands[0]['ver']}-{cands[0]['rel']}" if cands else ""
+            for rec in cands[:KEEP]:
+                fname = os.path.basename(rec["loc"])
+                dst = os.path.join(pkg_dir, fname)
+                if os.path.exists(dst) and sha256_file(dst) == rec["sha256"]:
+                    skipped += 1
+                    continue
+                log(f"下载 {name} {rec['ver']}-{rec['rel']} [{arch}]")
+                data = fetch(f"{base}/{rec['loc']}")
+                if hashlib.sha256(data).hexdigest() != rec["sha256"]:
+                    raise SystemExit(f"SHA256 校验失败: {fname}")
+                with open(dst, "wb") as f:
+                    f.write(data)
+                downloaded += 1
+        ok_arches += 1
+    log(f"下载 {downloaded} 个新包，跳过 {skipped} 个已存在")
+    if not ok_arches:
+        raise SystemExit("所有架构索引均拉取失败，请检查 RPM_DISTRO/RPM_VERSION 是否正确")
+
+    # ---------- 生成 repodata ----------
+    subprocess.run(["createrepo_c", pkg_dir], check=True)
+    repomd = os.path.join(pkg_dir, "repodata", "repomd.xml")
+    if not os.path.exists(repomd):
+        raise SystemExit("createrepo_c 未生成 repomd.xml")
+    log(f"生成 repodata: {pkg_dir}/repodata")
+
+    # ---------- 签名 repomd.xml（dnf repo_gpgcheck 校验） ----------
+    keyid = os.environ.get("GPG_KEY_ID") or detect_keyid()
+    if keyid:
+        subprocess.run(gpg_base(keyid) + ["--detach-sign", "--armor",
+                                          "-o", repomd + ".asc", repomd], check=True)
+        log(f"已用 {keyid} 签名 repomd.xml")
+    else:
+        log("!! 未找到 GPG 私钥，跳过签名（仓库将无法通过 dnf 校验）")
+
+    # ---------- 附带文件 ----------
+    keyring_dir = os.path.join(repo_root, "keyring")
+    os.makedirs(keyring_dir, exist_ok=True)
+    if os.path.exists("public-key.asc"):
+        # rpm 的 gpgkey= 支持 armored 公钥
+        shutil.copy("public-key.asc", os.path.join(keyring_dir, "docker-cn.asc"))
+        log("已复制公钥: keyring/docker-cn.asc")
+    with open(os.path.join(repo_root, "repo-version.txt"), "w", encoding="utf-8") as f:
+        f.write(f"id={rid}\n")
+        f.write(f"source={distro}/{version}\n")
+        f.write(f"synced={time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
+        for arch in latest:
+            f.write(f"[{arch}]\n")
+            for pkg in PACKAGES:
+                f.write(f"{pkg}={latest[arch][pkg]}\n")
+
+    # ---------- 打包（顶层为 Packages/ repodata/ keyring/ repo-version.txt） ----------
+    tar_name = f"docker-ce-repo-rpm-{rid}.tar"
+    subprocess.run(["tar", "-cf", tar_name, "-C", repo_root,
+                    "Packages", "keyring", "repo-version.txt"], check=True)
+    with open(tar_name + ".sha256", "w", encoding="utf-8") as f:
+        f.write(f"{sha256_file(tar_name)}  {tar_name}\n")
+    size_mb = os.path.getsize(tar_name) / 1048576
+    log(f"完成: {tar_name} ({size_mb:.1f} MB)")
+
+
+def main():
+    if os.environ.get("CODENAME"):
+        sync_deb()
+    elif os.environ.get("RPM_DISTRO"):
+        sync_rpm()
+    else:
+        raise SystemExit("请设置 CODENAME（deb 模式）或 RPM_DISTRO/RPM_VERSION/RPM_ID（rpm 模式）")
 
 
 if __name__ == "__main__":

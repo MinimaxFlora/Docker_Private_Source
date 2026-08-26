@@ -28,7 +28,8 @@ jobs:
       - name: 安装依赖
         run: |
           sudo apt-get -qq update
-          sudo apt-get -qq install -y apt-ftparchive gnupg curl
+          sudo apt-get -qq install -y gnupg
+          command -v apt-ftparchive >/dev/null || sudo apt-get -qq install -y apt
 
       - name: 导入签名私钥
         env:

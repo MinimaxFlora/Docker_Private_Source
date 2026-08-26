@@ -1,0 +1,10 @@
+# 统一 LF：shell/python/workflow 等文本文件禁止 CRLF（Linux runner 上会出错）
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.md text eol=lf
+*.asc text eol=lf
+*.key text eol=lf
+.gitignore text eol=lf

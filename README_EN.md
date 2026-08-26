@@ -49,7 +49,7 @@ The script will:
 | Option | Description |
 | --- | --- |
 | `--version <VERSION>` | Install a specific version, e.g. `--version 29.7` |
-| `--mirror <URL>` | Custom GitHub accelerator prefix (auto-probes by default) |
+| `--mirror <URL>` | Custom GitHub accelerator prefix (overrides default; auto-detects network: China prefers `gh-proxy.kejizero.xyz`, overseas uses direct) |
 | `--registry-mirror <URL>` | Append one more registry mirror (repeatable) |
 | `--no-registry-mirror` | Skip registry mirror configuration |
 | `--no-autostart` | Do not auto-start the docker service |
@@ -57,8 +57,15 @@ The script will:
 | `--help` | Help |
 
 Environment variables work as equivalents: `VERSION`, `DOWNLOAD_MIRROR`,
-`REGISTRY_MIRRORS` (comma-separated), `NO_AUTOSTART`, `NO_REGISTRY_MIRROR`,
-`PROJECT`, `TAG`.
+`CHINA_MIRROR` (default accelerator for China networks, defaults to
+`https://gh-proxy.kejizero.xyz`), `REGISTRY_MIRRORS` (comma-separated),
+`NO_AUTOSTART`, `NO_REGISTRY_MIRROR`, `PROJECT`, `TAG`.
+
+> Network auto-detection: the script probes overseas reachability (google/baidu)
+> and, when on a China network, automatically prefers the
+> `gh-proxy.kejizero.xyz` accelerator with other mirrors as fallback; overseas
+> networks download directly from GitHub. Override with `--mirror` or the
+> `CHINA_MIRROR` environment variable.
 
 ## Supported distros
 

@@ -42,15 +42,20 @@ sh -c "$(curl -fsSL https://testingcf.jsdelivr.net/gh/MinimaxFlora/Docker_Privat
 | 参数 | 说明 |
 | --- | --- |
 | `--version <VERSION>` | 指定版本，如 `--version 29.7` 或 `--version 29.7.2` |
-| `--mirror <URL>` | 指定 GitHub 加速前缀（默认自动探测 ghfast.top / gh-proxy.com 等） |
+| `--mirror <URL>` | 指定 GitHub 加速前缀（覆盖默认；默认自动检测网络：国内优先 `gh-proxy.kejizero.xyz`，海外直连） |
 | `--registry-mirror <URL>` | 追加一个 docker 镜像加速地址（可重复） |
 | `--no-registry-mirror` | 跳过 registry 镜像加速配置 |
 | `--no-autostart` | 不自动启动 docker 服务 |
 | `--dry-run` | 只打印将要执行的步骤 |
 | `--help` | 帮助 |
 
-环境变量与参数等效：`VERSION`、`DOWNLOAD_MIRROR`、`REGISTRY_MIRRORS`（逗号分隔）、
-`NO_AUTOSTART`、`NO_REGISTRY_MIRROR`、`PROJECT`、`TAG`。
+环境变量与参数等效：`VERSION`、`DOWNLOAD_MIRROR`、`CHINA_MIRROR`（国内默认加速站，默认
+`https://gh-proxy.kejizero.xyz`）、`REGISTRY_MIRRORS`（逗号分隔）、`NO_AUTOSTART`、
+`NO_REGISTRY_MIRROR`、`PROJECT`、`TAG`。
+
+> 网络自动检测：脚本会先探测境外可达性（google / baidu），判定为国内网络时自动优先使用
+> `gh-proxy.kejizero.xyz` 加速站下载仓库包，其余镜像兜底；海外网络则直连 GitHub。
+> 也可用 `--mirror` 或环境变量 `CHINA_MIRROR` 指定你自己的加速站。
 
 示例：
 

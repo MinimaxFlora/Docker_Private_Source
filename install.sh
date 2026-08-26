@@ -32,7 +32,8 @@
 #
 # 环境变量（与参数等效）:
 #   PROJECT=owner/repo  TAG=latest  VERSION=29.7  DOWNLOAD_MIRROR=https://ghfast.top
-#   REGISTRY_MIRRORS="a.com,b.com"  NO_AUTOSTART=1  NO_REGISTRY_MIRROR=1  DRY_RUN=1
+#   CHINA_MIRROR=https://你的加速站  REGISTRY_MIRRORS="a.com,b.com"
+#   NO_AUTOSTART=1  NO_REGISTRY_MIRROR=1  DRY_RUN=1
 # =============================================================================
 
 # ---- sh 兼容层：sh -c "$(curl ...)" 会交给 dash 执行，这里强制切回 bash ----
@@ -41,10 +42,11 @@ if [ -z "${BASH_VERSION:-}" ]; then
         if [ -f "$0" ] && [ -r "$0" ]; then
             exec bash "$0" "$@"
         fi
-        # curl | sh 场景：脚本无 $0 文件，重新下载后交给 bash（页面域路径，绕开 raw CDN 缓存）
+        # curl | sh 场景：脚本无 $0 文件，重新下载后交给 bash（多源：页面域 + jsDelivr + 加速站）
         for _u in \
             "https://github.com/MinimaxFlora/Docker_Private_source/raw/refs/heads/master/install.sh" \
-            "https://testingcf.jsdelivr.net/gh/MinimaxFlora/Docker_Private_source@master/install.sh"; do
+            "https://testingcf.jsdelivr.net/gh/MinimaxFlora/Docker_Private_source@master/install.sh" \
+            "https://ghfast.top/https://github.com/MinimaxFlora/Docker_Private_source/raw/refs/heads/master/install.sh"; do
             if _s="$(curl -fsSL --max-time 20 "$_u" 2>/dev/null)"; then
                 exec bash -c "$_s" bash "$@"
             fi
@@ -62,6 +64,8 @@ PROJECT="${PROJECT:-MinimaxFlora/Docker_Private_source}"   # 仓库（fork 后�
 TAG="${TAG:-latest}"                                    # Release tag（固定 latest，覆盖更新）
 # GitHub 加速前缀候选（按序尝试；ghproxy 类镜像仅代理 /releases/download/ 下载）
 DEFAULT_MIRRORS="ghfast.top gh-proxy.com ghproxy.net mirror.ghproxy.com gh-proxy.kejizero.xyz"
+# 国内网络默认加速站（自动检测命中国内时优先使用；可 --mirror 或环境变量 CHINA_MIRROR 覆盖）
+CHINA_MIRROR="${CHINA_MIRROR:-https://gh-proxy.kejizero.xyz}"
 REPO_DIR="/opt/docker-ce-cn"                            # 本地 apt/yum 仓库解压目录
 KEYRING="/etc/apt/keyrings/docker-cn.gpg"
 SOURCE_FILE="/etc/apt/sources.list.d/docker-cn.list"
@@ -126,13 +130,43 @@ if [ "$user" != 'root' ]; then
     fi
 fi
 
+# 检测是否为国内网络：境外可达（google 通）→ 非国内；
+# 境外不通但国内可达（baidu 通）→ 国内；都测不通（网络异常）→ 按国内容错走加速站
+IS_CHINA=""
+is_china_network() {
+    if [ -n "$IS_CHINA" ]; then
+        [ "$IS_CHINA" = "1" ] && return 0 || return 1
+    fi
+    if curl -fsSL -m 5 -o /dev/null https://www.google.com/generate_204 2>/dev/null; then
+        IS_CHINA=0
+        return 1
+    fi
+    if curl -fsSL -m 5 -o /dev/null https://www.baidu.com 2>/dev/null; then
+        IS_CHINA=1
+        return 0
+    fi
+    IS_CHINA=1
+    return 0
+}
+
 # 下载 release 资产（多镜像自动探测）。$1=远端文件名 $2=本地路径 $3=超时秒
 download_release_file() {
     local name="$1" dst="$2" timeout="${3:-600}" url candidates
     local release_url="https://github.com/$PROJECT/releases/download/$TAG/$name"
     if [ -n "$DOWNLOAD_MIRROR" ]; then
+        # 用户显式指定：只用该加速前缀
         candidates="$DOWNLOAD_MIRROR/$release_url"
+    elif is_china_network; then
+        # 国内网络：默认加速站优先，其余镜像兜底，直连最后
+        info "检测到国内网络，优先使用加速站 $CHINA_MIRROR"
+        candidates="$CHINA_MIRROR/$release_url"
+        for m in $DEFAULT_MIRRORS; do
+            [ "https://$m" = "$CHINA_MIRROR" ] || candidates="$candidates https://$m/$release_url"
+        done
+        candidates="$candidates $release_url"
     else
+        # 海外网络：直连优先，镜像兜底
+        info "检测到海外网络，直连 GitHub"
         candidates="$release_url"
         for m in $DEFAULT_MIRRORS; do
             candidates="$candidates https://$m/$release_url"

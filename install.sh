@@ -461,6 +461,33 @@ add_to_docker_group() {
     fi
 }
 
+# 确保基础工具齐全（极简系统 / 容器镜像可能缺 tar 等）
+ensure_basic_tools() {
+    local missing=""
+    for t in tar curl sha256sum sed awk sort tr; do
+        command_exists "$t" || missing="$missing $t"
+    done
+    [ -z "$missing" ] && return 0
+    info "检测到系统缺少基础工具:$missing，自动安装中..."
+    case "$PKG_KIND" in
+        deb)
+            $sh_c "DEBIAN_FRONTEND=noninteractive apt-get -y -qq update >/dev/null 2>&1 || true"
+            $sh_c "DEBIAN_FRONTEND=noninteractive apt-get -y -qq install $missing"
+            ;;
+        rpm)
+            if command_exists dnf; then
+                $sh_c "dnf -y -q install $missing"
+            else
+                $sh_c "yum -y -q install $missing"
+            fi
+            ;;
+    esac
+    for t in $missing; do
+        command_exists "$t" || die "基础工具 $t 安装失败"
+    done
+    info "基础工具已就绪"
+}
+
 configure_registry_mirrors() {
     local mirrors daemon_json mirrors_json m
     if [ "$NO_REGISTRY_MIRROR" = "1" ]; then
@@ -571,6 +598,9 @@ if [ "$FORCE" != "1" ] && command_exists docker; then
     echo
     exit 0
 fi
+
+# 确保基础工具齐全（极简系统缺 tar 等会导致解压失败）
+ensure_basic_tools
 
 # ----------------------------- 执行 -----------------------------
 if [ "$PKG_KIND" = "deb" ]; then

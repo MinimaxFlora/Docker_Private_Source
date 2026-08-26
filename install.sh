@@ -264,8 +264,10 @@ do_install_deb() {
     [ -s "$KEYRING" ] || die "仓库公钥安装失败（$KEYRING 为空）"
     info "已安装仓库公钥到 $KEYRING"
 
+    # 备份移出 sources.list.d（apt 对非 .list 扩展名会告警），并清理历史残留备份
+    $sh_c "rm -f /etc/apt/sources.list.d/docker-cn.list.bak.* 2>/dev/null || true"
     if [ -f "$SOURCE_FILE" ]; then
-        $sh_c "cp $SOURCE_FILE $SOURCE_FILE.bak.$(date +%s)"
+        $sh_c "cp $SOURCE_FILE /etc/apt/docker-cn.list.bak.$(date +%s)"
         info "已备份原 $SOURCE_FILE"
     fi
     # file: 源 —— 无第三方网络依赖，仓库内容来自已校验的本地文件
@@ -326,8 +328,10 @@ gpgcheck=0
 repo_gpgcheck=1
 gpgkey=file://$REPO_DIR/keyring/docker-cn.asc
 REPO
+    # 备份移出 yum.repos.d（dnf 对非 .repo 扩展名会告警），并清理历史残留备份
+    $sh_c "rm -f /etc/yum.repos.d/docker-cn.repo.bak.* 2>/dev/null || true"
     if [ -f "$RPM_REPO_FILE" ]; then
-        $sh_c "cp $RPM_REPO_FILE $RPM_REPO_FILE.bak.$(date +%s)"
+        $sh_c "cp $RPM_REPO_FILE /etc/docker-cn.repo.bak.$(date +%s)"
         info "已备份原 $RPM_REPO_FILE"
     fi
     $sh_c "install -m 0644 $tmpdir/docker-cn.repo $RPM_REPO_FILE"

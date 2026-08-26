@@ -1,0 +1,63 @@
+name: sync-docker-ce
+
+on:
+  schedule:
+    - cron: "23 2 * * 1"        # 每周一 02:23 UTC
+  workflow_dispatch:
+    inputs:
+      keep_versions:
+        description: 每个包保留的版本数（默认 3）
+        required: false
+        type: number
+        default: 3
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: sync-${{ matrix.codename }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        codename: [trixie, bookworm, bullseye, noble, jammy, focal]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get -qq update
+          sudo apt-get -qq install -y apt-ftparchive gnupg curl
+
+      - name: 导入签名私钥
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          if [ -n "$GPG_PRIVATE_KEY" ]; then
+            printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --yes --import
+            gpg --batch --list-secret-keys --keyid-format long
+          else
+            echo "::warning::未配置 GPG_PRIVATE_KEY，将跳过签名（apt 校验将失败）"
+          fi
+
+      - name: 同步官方仓库 + 重签名 + 打包
+        env:
+          CODENAME: ${{ matrix.codename }}
+          KEEP_VERSIONS: ${{ github.event.inputs.keep_versions || '3' }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: python3 sync-repo.py
+
+      - name: 上传 GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          CN="${{ matrix.codename }}"
+          # 固定 tag latest：URL 恒定，脚本无需探测版本；资产每次覆盖上传
+          gh release create latest --repo "$GITHUB_REPOSITORY" \
+            --title "docker-ce-cn 仓库同步" \
+            --notes "自动同步 docker-ce 官方仓库（$CN），GPG 重签名" 2>/dev/null || true
+          gh release upload latest \
+            "docker-ce-repo-$CN.tar" "docker-ce-repo-$CN.tar.sha256" \
+            --repo "$GITHUB_REPOSITORY" --clobber

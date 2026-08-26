@@ -1,0 +1,13 @@
+# 签名私钥 —— 绝不要提交
+gpg-private.key
+*.gpg-key
+
+# 同步产物
+*.tar
+*.tar.sha256
+dists/
+pool/
+keyring/
+repo-version.txt
+
+__pycache__/

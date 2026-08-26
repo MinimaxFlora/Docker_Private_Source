@@ -117,9 +117,16 @@ fi
 # ----------------------------- 工具函数 -----------------------------
 command_exists() { command -v "$@" >/dev/null 2>&1; }
 
-info()  { echo "INFO: $*"; }
-warn()  { echo "WARNING: $*" >&2; }
-die()   { echo "ERROR: $*" >&2; exit 1; }
+# 颜色输出：终端时启用（INFO 绿 / WARN 黄 / ERROR 红），
+# 重定向到文件或 NO_COLOR=1 时自动无色，便于日志落盘
+if [ -z "${NO_COLOR:-}" ] && { [ -t 1 ] || [ -t 2 ]; }; then
+    C_INFO="\033[32m"; C_WARN="\033[33m"; C_ERR="\033[31m"; C_RESET="\033[0m"
+else
+    C_INFO=""; C_WARN=""; C_ERR=""; C_RESET=""
+fi
+info()  { echo -e "${C_INFO}INFO: $*${C_RESET}"; }
+warn()  { echo -e "${C_WARN}WARN: $*${C_RESET}" >&2; }
+die()   { echo -e "${C_ERR}ERROR: $*${C_RESET}" >&2; exit 1; }
 
 user="$(id -un 2>/dev/null || true)"
 sh_c='sh -c'
@@ -461,10 +468,10 @@ add_to_docker_group() {
     fi
 }
 
-# 确保基础工具齐全（极简系统 / 容器镜像可能缺 tar 等）
+# 确保基础工具齐全（极简系统 / 容器镜像可能缺 tar 等；已有则跳过）
 ensure_basic_tools() {
     local missing=""
-    for t in tar curl sha256sum sed awk sort tr; do
+    for t in tar curl sha256sum sed awk sort tr grep; do
         command_exists "$t" || missing="$missing $t"
     done
     [ -z "$missing" ] && return 0

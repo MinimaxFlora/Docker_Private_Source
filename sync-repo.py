@@ -161,7 +161,7 @@ def main():
         with open(pkg_index, "w", encoding="utf-8") as f:
             subprocess.run(["apt-ftparchive", "packages", os.path.join(pool_root, arch)],
                            stdout=f, check=True)
-        with open(pkg_index, "rb") as fi, gzip.open(pkg_index + ".gz", "wb", mtime=0) as fo:
+        with open(pkg_index, "rb") as fi, gzip.open(pkg_index + ".gz", "wb") as fo:
             fo.write(fi.read())
         log(f"生成索引: {pkg_index}.gz")
 

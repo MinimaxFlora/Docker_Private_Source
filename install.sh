@@ -147,10 +147,14 @@ if [ "$DRY_RUN" = "1" ]; then
     echo "# --dry-run 模式：以下为将要执行的步骤 --"
 fi
 
+# 用子 shell 读取 os-release，避免其 VERSION 字段（如 Debian 的 "12 (bookworm)"）
+# 污染本脚本的 --version 参数变量 VERSION
 [ -r /etc/os-release ] || die "无法读取 /etc/os-release"
-. /etc/os-release
-lsb_dist="${ID:-}"
-dist_version="${VERSION_CODENAME:-}"
+lsb_dist="$(. /etc/os-release && printf '%s' "${ID:-}")"
+dist_version="$(. /etc/os-release && printf '%s' "${VERSION_CODENAME:-}")"
+if [ -z "$dist_version" ] && command_exists lsb_release; then
+    dist_version="$(lsb_release --codename 2>/dev/null | cut -f2 || true)"
+fi
 arch="$(dpkg --print-architecture 2>/dev/null || true)"
 
 case "$lsb_dist" in

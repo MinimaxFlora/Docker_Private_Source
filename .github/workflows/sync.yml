@@ -143,7 +143,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       actions: write
+      contents: read
     steps:
+      - uses: actions/checkout@v4
+
       - name: 删除历史 workflow runs（保留当前 run）
         env:
           GH_TOKEN: ${{ github.token }}
@@ -160,3 +163,10 @@ jobs:
             fi
           done
           echo "清理完成：删除 $deleted 个历史 run（保留当前 run）"
+
+      - name: 刷新 Release 说明
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release edit latest --repo "$GITHUB_REPOSITORY" \
+            --notes-file RELEASE_NOTES.md

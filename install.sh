@@ -542,6 +542,8 @@ print_summary() {
         set -e
     fi
     echo
+    echo "  - compose:  $(docker compose version 2>/dev/null | head -1 || echo '未安装')"
+    echo "  - buildx:   $(docker buildx version 2>/dev/null | head -1 || echo '未安装')"
     echo "  - 仓库:  $PROJECT (tag: $TAG)"
     if [ "$PKG_KIND" = "deb" ]; then
         echo "  - 发行版: ${lsb_dist} ${dist_version} / ${arch}"

@@ -9,10 +9,10 @@
 #
 # 用法:
 #   # 默认安装最新稳定版
-#   sh -c "$(curl -fsSL https://github.com/MinimaxFlora/docker-install-cn/raw/refs/heads/master/install.sh)"
+#   sh -c "$(curl -fsSL https://github.com/MinimaxFlora/Docker_Private_source/raw/refs/heads/master/install.sh)"
 #
 #   # 下载后执行（支持参数）
-#   curl -fsSL https://github.com/MinimaxFlora/docker-install-cn/raw/refs/heads/master/install.sh -o install.sh
+#   curl -fsSL https://github.com/MinimaxFlora/Docker_Private_source/raw/refs/heads/master/install.sh -o install.sh
 #   sudo bash install.sh --version 27.3
 #
 # 参数:
@@ -38,8 +38,8 @@ if [ -z "${BASH_VERSION:-}" ]; then
         fi
         # curl | sh 场景：脚本无 $0 文件，重新下载后交给 bash（页面域路径，绕开 raw CDN 缓存）
         for _u in \
-            "https://github.com/MinimaxFlora/docker-install-cn/raw/refs/heads/master/install.sh" \
-            "https://testingcf.jsdelivr.net/gh/MinimaxFlora/docker-install-cn@master/install.sh"; do
+            "https://github.com/MinimaxFlora/Docker_Private_source/raw/refs/heads/master/install.sh" \
+            "https://testingcf.jsdelivr.net/gh/MinimaxFlora/Docker_Private_source@master/install.sh"; do
             if _s="$(curl -fsSL --max-time 20 "$_u" 2>/dev/null)"; then
                 exec bash -c "$_s" bash "$@"
             fi
@@ -53,7 +53,7 @@ fi
 set -euo pipefail
 
 # ----------------------------- 可配置项 -----------------------------
-PROJECT="${PROJECT:-MinimaxFlora/docker-install-cn}"   # 仓库（fork 后改这里）
+PROJECT="${PROJECT:-MinimaxFlora/Docker_Private_source}"   # 仓库（fork 后改这里）
 TAG="${TAG:-latest}"                                    # Release tag（固定 latest，覆盖更新）
 # GitHub 加速前缀候选（按序尝试；ghproxy 类镜像仅代理 /releases/download/ 下载）
 DEFAULT_MIRRORS="ghfast.top gh-proxy.com ghproxy.net mirror.ghproxy.com gh-proxy.kejizero.xyz"

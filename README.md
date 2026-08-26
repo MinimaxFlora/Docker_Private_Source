@@ -1,6 +1,6 @@
-# docker-install-cn · 国内一键安装 Docker
+# Docker_Private_source · 国内一键安装 Docker
 
-[![sync-docker-ce](https://github.com/MinimaxFlora/docker-install-cn/actions/workflows/sync.yml/badge.svg)](https://github.com/MinimaxFlora/docker-install-cn/actions/workflows/sync.yml)
+[![sync-docker-ce](https://github.com/MinimaxFlora/Docker_Private_source/actions/workflows/sync.yml/badge.svg)](https://github.com/MinimaxFlora/Docker_Private_source/actions/workflows/sync.yml)
 
 [English](./README_EN.md)
 
@@ -14,13 +14,13 @@ GitHub Release，一键脚本经 **ghproxy 等加速通道**下载并在本地�
 
 ```bash
 # Debian / Ubuntu (amd64 / arm64)，默认安装最新稳定版
-sh -c "$(curl -fsSL https://github.com/MinimaxFlora/docker-install-cn/raw/refs/heads/master/install.sh)"
+sh -c "$(curl -fsSL https://github.com/MinimaxFlora/Docker_Private_source/raw/refs/heads/master/install.sh)"
 ```
 
 GitHub 直连不顺畅时，可从 jsDelivr CDN 拉取脚本：
 
 ```bash
-sh -c "$(curl -fsSL https://testingcf.jsdelivr.net/gh/MinimaxFlora/docker-install-cn@master/install.sh)"
+sh -c "$(curl -fsSL https://testingcf.jsdelivr.net/gh/MinimaxFlora/Docker_Private_source@master/install.sh)"
 ```
 
 脚本自动完成：
@@ -51,7 +51,7 @@ sh -c "$(curl -fsSL https://testingcf.jsdelivr.net/gh/MinimaxFlora/docker-instal
 
 ```bash
 # 指定版本安装
-curl -fsSL https://github.com/MinimaxFlora/docker-install-cn/raw/refs/heads/master/install.sh -o install.sh
+curl -fsSL https://github.com/MinimaxFlora/Docker_Private_source/raw/refs/heads/master/install.sh -o install.sh
 sudo bash install.sh --version 27.3
 
 # 指定加速前缀 + 追加镜像加速

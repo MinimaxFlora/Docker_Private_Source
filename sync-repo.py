@@ -14,7 +14,7 @@ docker-ce 仓库同步与重签名脚本（在 GitHub Actions 中运行）
   KEEP_VERSIONS     每个包保留的版本数（默认 3）
   GPG_PASSPHRASE    签名密钥口令（密钥无口令时留空）
   GPG_KEY_ID        签名密钥 ID（默认自动探测第一个私钥）
-  GITHUB_REPOSITORY 用于 Release 元数据（如 MinimaxFlora/docker-install-cn）
+  GITHUB_REPOSITORY 用于 Release 元数据（如 MinimaxFlora/Docker_Private_source）
 """
 
 import gzip

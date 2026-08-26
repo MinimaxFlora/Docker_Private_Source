@@ -201,11 +201,22 @@ def rpm_repomd(base):
     root = ET.fromstring(repomd)
     href = root.find(f"{NS_REPO}data[@type='primary']/{NS_REPO}location").attrib["href"]
     primary = fetch(f"{base}/{href}")
-    try:
-        import zstandard
-        xml = zstandard.ZstdDecompressor().decompressobj().decompress(primary)
-    except ImportError:
-        raise SystemExit("缺少 zstandard 库（rpm 模式需要），请先: pip install zstandard")
+    # primary 的压缩格式由扩展名决定：新仓库为 .zst，CentOS 7 等老仓库为 .gz
+    if href.endswith(".zst"):
+        try:
+            import zstandard
+        except ImportError:
+            raise SystemExit("缺少 zstandard 库（rpm 模式需要），请先: pip install zstandard")
+        # 流式解压：帧头可能不含 content size，不能用 decompress() 直接方法
+        dobj = zstandard.ZstdDecompressor().decompressobj()
+        chunks = [dobj.decompress(primary)]
+        while not dobj.eof:
+            chunks.append(dobj.decompress(b""))
+        xml = b"".join(chunks)
+    elif href.endswith(".gz"):
+        xml = gzip.decompress(primary)
+    else:
+        xml = primary
     return ET.fromstring(xml)
 
 

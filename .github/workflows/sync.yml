@@ -10,6 +10,15 @@ on:
         required: false
         type: number
         default: 3
+      run_target:
+        description: 运行目标（schedule 自动触发时全部运行）
+        required: false
+        type: choice
+        default: all
+        options:
+          - all
+          - deb
+          - rpm
 
 permissions:
   contents: write
@@ -17,6 +26,7 @@ permissions:
 jobs:
   sync-deb:
     name: deb-${{ matrix.codename }}
+    if: github.event.inputs.run_target != 'rpm'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -68,6 +78,7 @@ jobs:
 
   sync-rpm:
     name: rpm-${{ matrix.id }}
+    if: github.event.inputs.run_target != 'deb'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

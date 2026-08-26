@@ -134,3 +134,29 @@ jobs:
           gh release upload latest \
             "docker-ce-repo-rpm-$ID.tar" "docker-ce-repo-rpm-$ID.tar.sha256" \
             --repo "$GITHUB_REPOSITORY" --clobber
+
+  cleanup:
+    name: 清理历史运行记录
+    # 无论同步成败都执行；等 sync 两个 job 结束后清掉全部历史 run（保留当前）
+    if: always()
+    needs: [sync-deb, sync-rpm]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: 删除历史 workflow runs（保留当前 run）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          deleted=0
+          # 拉取最近 100 个 run 的 id 并逐个删除（当前 run 除外）
+          ids="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100" \
+            --jq '.workflow_runs[].id' 2>/dev/null || true)"
+          for id in $ids; do
+            [ "$id" = "$GITHUB_RUN_ID" ] && continue
+            if gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/runs/$id" >/dev/null 2>&1; then
+              deleted=$((deleted + 1))
+            fi
+          done
+          echo "清理完成：删除 $deleted 个历史 run（保留当前 run）"

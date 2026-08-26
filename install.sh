@@ -389,7 +389,8 @@ REPO
 
     # ---------- 安装 Docker ----------
     # 只安装仓库中实际存在的包（各发行版包集合略有差异）
-    names="$($sh_c "ls $REPO_DIR/Packages/*.rpm 2>/dev/null | sed 's#.*/##; s/-[0-9].*//' | sort -u" 2>/dev/null || true)"
+    # 注意：ls 输出是换行分隔，必须转成空格，否则 case " $n " 匹配不到
+    names="$($sh_c "ls $REPO_DIR/Packages/*.rpm 2>/dev/null | sed 's#.*/##; s/-[0-9].*//' | sort -u | tr '\n' ' '" 2>/dev/null || true)"
     pkgs=""
     for n in docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-buildx-plugin docker-ce-rootless-extras docker-model-plugin; do
         case " $names " in

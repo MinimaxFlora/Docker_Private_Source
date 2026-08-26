@@ -27,6 +27,7 @@
 #   --channel <stable>         通道，当前仅 stable
 #   --no-autostart             不自动启动 docker 服务
 #   --no-registry-mirror       不配置 registry 镜像加速
+#   --force                    已安装时也强制执行（重装/升级）
 #   --dry-run                  只打印将执行的步骤，不实际安装
 #   --help                     帮助
 #
@@ -83,6 +84,7 @@ REGISTRY_MIRRORS="${REGISTRY_MIRRORS:-}"
 NO_AUTOSTART="${NO_AUTOSTART:-0}"
 NO_REGISTRY_MIRROR="${NO_REGISTRY_MIRROR:-0}"
 DRY_RUN="${DRY_RUN:-0}"
+FORCE="${FORCE:-0}"
 EXTRA_MIRRORS=""
 
 usage() {
@@ -98,6 +100,7 @@ while [ $# -gt 0 ]; do
         --channel) CHANNEL="$2"; shift ;;
         --no-autostart) NO_AUTOSTART=1 ;;
         --no-registry-mirror) NO_REGISTRY_MIRROR=1 ;;
+        --force) FORCE=1 ;;
         --dry-run) DRY_RUN=1 ;;
         --help) usage ;;
         --*) echo "非法参数: $1" >&2; usage ;;
@@ -549,6 +552,23 @@ print_summary() {
     echo "  - 加速:  /etc/docker/daemon.json 中的 registry-mirrors 可随时增删"
     echo "================================================================================="
 }
+
+# ----------------------------- 已安装检查 -----------------------------
+# 已安装且未加 --force：直接显示版本/状态后退出，避免重复下载与重装
+if [ "$FORCE" != "1" ] && command_exists docker; then
+    echo
+    echo "========================================================================"
+    info "Docker 已安装: $(docker --version 2>/dev/null || docker -v 2>/dev/null || echo 未知版本)"
+    if command_exists systemctl && systemctl is-active docker >/dev/null 2>&1; then
+        info "docker 服务状态: 运行中"
+    elif command_exists systemctl; then
+        warn "docker 服务状态: 未运行（可 systemctl start docker）"
+    fi
+    echo "如需重新安装或升级到仓库最新版本，请加 --force 参数重新执行本脚本"
+    echo "========================================================================"
+    echo
+    exit 0
+fi
 
 # ----------------------------- 执行 -----------------------------
 if [ "$PKG_KIND" = "deb" ]; then

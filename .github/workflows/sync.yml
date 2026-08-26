@@ -55,10 +55,13 @@ jobs:
         run: |
           set -euo pipefail
           CN="${{ matrix.codename }}"
-          # 固定 tag latest：URL 恒定，脚本无需探测版本；资产每次覆盖上传
+          # 固定 tag latest：URL 恒定，脚本无需探测版本
           gh release create latest --repo "$GITHUB_REPOSITORY" \
             --title "docker-ce-cn 仓库同步" \
             --notes "自动同步 docker-ce 官方仓库（$CN），GPG 重签名" 2>/dev/null || true
+          # 先删后传：asset id 变化 → CDN 缓存 key 变化，客户端不会拿到旧包
+          gh release delete-asset latest "docker-ce-repo-$CN.tar" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release delete-asset latest "docker-ce-repo-$CN.tar.sha256" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
           gh release upload latest \
             "docker-ce-repo-$CN.tar" "docker-ce-repo-$CN.tar.sha256" \
             --repo "$GITHUB_REPOSITORY" --clobber
@@ -114,6 +117,9 @@ jobs:
           gh release create latest --repo "$GITHUB_REPOSITORY" \
             --title "docker-ce-cn 仓库同步" \
             --notes "自动同步 docker-ce 官方仓库（rpm: $ID），GPG 重签名" 2>/dev/null || true
+          # 先删后传：asset id 变化 → CDN 缓存 key 变化，客户端不会拿到旧包
+          gh release delete-asset latest "docker-ce-repo-rpm-$ID.tar" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release delete-asset latest "docker-ce-repo-rpm-$ID.tar.sha256" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
           gh release upload latest \
             "docker-ce-repo-rpm-$ID.tar" "docker-ce-repo-rpm-$ID.tar.sha256" \
             --repo "$GITHUB_REPOSITORY" --clobber

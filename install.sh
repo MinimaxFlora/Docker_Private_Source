@@ -218,19 +218,35 @@ fi
 tmpdir="$(mktemp -d)"
 trap 'rm -rf "$tmpdir"' EXIT
 
+# 下载并校验仓库包（自动重试：GitHub CDN 可能缓存旧版同名资产，重试可命中新内容）
+download_and_verify() {
+    local name="$1" retry=0 expected actual
+    while :; do
+        download_release_file "$name" "$tmpdir/$name" 900 || die "仓库包下载失败，请检查网络或换 --mirror"
+        download_release_file "$name.sha256" "$tmpdir/$name.sha256" 60 || die "校验文件下载失败"
+        expected="$(awk '{print $1}' "$tmpdir/$name.sha256")"
+        actual="$(sha256sum "$tmpdir/$name" | awk '{print $1}')"
+        if [ -n "$expected" ] && [ "$expected" = "$actual" ]; then
+            info "SHA256 校验通过"
+            return 0
+        fi
+        retry=$((retry + 1))
+        if [ "$retry" -ge 3 ]; then
+            die "SHA256 校验失败（可能下载不完整，或 GitHub CDN 仍缓存旧版仓库包，请稍候数分钟重试）"
+        fi
+        warn "SHA256 校验失败（第 $retry 次），清除缓存文件后重新下载..."
+        rm -f "$tmpdir/$name" "$tmpdir/$name.sha256"
+        sleep 15
+    done
+}
+
 # ===========================================================================
 # deb 流程（Debian / Ubuntu）
 # ===========================================================================
 do_install_deb() {
-    local tar_name="docker-ce-repo-$dist_version.tar" expected actual
+    local tar_name="docker-ce-repo-$dist_version.tar"
     info "下载仓库: $tar_name（若网络慢，可 --mirror 指定加速前缀）"
-    download_release_file "$tar_name" "$tmpdir/$tar_name" 900 || die "仓库包下载失败，请检查网络或换 --mirror"
-    download_release_file "$tar_name.sha256" "$tmpdir/$tar_name.sha256" 60 || die "校验文件下载失败"
-
-    expected="$(awk '{print $1}' "$tmpdir/$tar_name.sha256")"
-    actual="$(sha256sum "$tmpdir/$tar_name" | awk '{print $1}')"
-    [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "SHA256 校验失败（可能下载不完整）"
-    info "SHA256 校验通过"
+    download_and_verify "$tar_name"
 
     # ---------- 安装 apt 源 ----------
     $sh_c "install -d -m 0755 $REPO_DIR"
@@ -294,15 +310,9 @@ do_install_deb() {
 # rpm 流程（CentOS / Rocky / RHEL / AlmaLinux / Fedora）
 # ===========================================================================
 do_install_rpm() {
-    local tar_name="docker-ce-repo-rpm-$rpm_id.tar" expected actual names pkgs pinned hit n pm
+    local tar_name="docker-ce-repo-rpm-$rpm_id.tar" names pkgs pinned hit n pm
     info "下载仓库: $tar_name（若网络慢，可 --mirror 指定加速前缀）"
-    download_release_file "$tar_name" "$tmpdir/$tar_name" 900 || die "仓库包下载失败，请检查网络或换 --mirror"
-    download_release_file "$tar_name.sha256" "$tmpdir/$tar_name.sha256" 60 || die "校验文件下载失败"
-
-    expected="$(awk '{print $1}' "$tmpdir/$tar_name.sha256")"
-    actual="$(sha256sum "$tmpdir/$tar_name" | awk '{print $1}')"
-    [ -n "$expected" ] && [ "$expected" = "$actual" ] || die "SHA256 校验失败（可能下载不完整）"
-    info "SHA256 校验通过"
+    download_and_verify "$tar_name"
 
     # ---------- 安装 yum/dnf 源（file:// 本地仓库） ----------
     $sh_c "install -d -m 0755 $REPO_DIR"

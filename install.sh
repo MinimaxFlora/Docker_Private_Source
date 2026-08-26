@@ -464,8 +464,23 @@ configure_registry_mirrors() {
         info "已跳过 registry 镜像加速（--no-registry-mirror）"
         return
     fi
-    mirrors="$DEFAULT_REGISTRY_MIRRORS $EXTRA_MIRRORS"
+    mirrors="$EXTRA_MIRRORS"
     [ -n "$REGISTRY_MIRRORS" ] && mirrors="$mirrors $(printf '%s' "$REGISTRY_MIRRORS" | tr ',' ' ')"
+    if is_china_network; then
+        # 国内网络：默认加速站 + 用户指定
+        mirrors="$DEFAULT_REGISTRY_MIRRORS $mirrors"
+        info "检测到国内网络，配置 registry 镜像加速"
+    elif [ -n "$mirrors" ]; then
+        # 海外网络：仅用户显式指定
+        info "海外网络：仅使用用户指定的 registry 镜像"
+    else
+        # 海外网络：直连 Docker Hub 更快，默认不配国内加速站
+        info "海外网络：跳过 registry 镜像加速（直连 Docker Hub 更快，可用 --registry-mirror 指定）"
+        if [ -f /etc/docker/daemon.json ] && grep -q "docker.1ms.run\|docker.m.daocloud.io\|docker.1panel.live" /etc/docker/daemon.json 2>/dev/null; then
+            warn "检测到 /etc/docker/daemon.json 残留国内加速镜像，可手动编辑移除（或备份文件见 /etc/docker/）"
+        fi
+        return
+    fi
     mirrors="$(printf '%s\n' $mirrors | awk 'NF' | sort -u | tr '\n' ' ')"
     if [ -n "$mirrors" ]; then
         info "配置 registry 镜像加速: $mirrors"

@@ -141,9 +141,7 @@ jobs:
     if: always()
     needs: [sync-deb, sync-rpm]
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
-      contents: read
+
     steps:
       - uses: actions/checkout@v4
 

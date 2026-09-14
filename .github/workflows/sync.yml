@@ -92,7 +92,7 @@ jobs:
           - { distro: fedora, version: "44", id: fedora-44 }
           - { distro: fedora, version: "43", id: fedora-43 }
     steps:
-      - uses: actions/checkout@v7.1
+      - uses: actions/checkout@v7.0.1
 
       - name: 安装依赖
         run: |

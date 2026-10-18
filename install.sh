@@ -22,6 +22,7 @@
 #
 # 参数:
 #   --version <VERSION>        指定 docker-ce 版本（如 29.7 或 29.7.2）
+#   --tag <TAG>                指定 Release 标签（如 v29.7.2；默认取最新版本化 Release）
 #   --mirror <URL>             GitHub 加速前缀（默认自动探测多个 ghproxy 镜像）
 #   --registry-mirror <URL>    追加一个 docker 镜像加速地址（可重复）
 #   --channel <stable>         通道，当前仅 stable
@@ -32,7 +33,7 @@
 #   --help                     帮助
 #
 # 环境变量（与参数等效）:
-#   PROJECT=owner/repo  TAG=latest  VERSION=29.7  DOWNLOAD_MIRROR=https://ghfast.top
+#   PROJECT=owner/repo  TAG=v29.7.2  VERSION=29.7  DOWNLOAD_MIRROR=https://ghfast.top
 #   CHINA_MIRROR=https://你的加速站  REGISTRY_MIRRORS="a.com,b.com"
 #   NO_AUTOSTART=1  NO_REGISTRY_MIRROR=1  DRY_RUN=1
 # =============================================================================
@@ -62,7 +63,9 @@ set -euo pipefail
 
 # ----------------------------- 可配置项 -----------------------------
 PROJECT="${PROJECT:-MinimaxFlora/Docker_Private_Source}"   # 仓库（fork 后改这里）
-TAG="${TAG:-latest}"                                    # Release tag（固定 latest，覆盖更新）
+# Release tag。留空 = 自动使用最新的版本化 Release（推荐）；
+# 需要固定/回滚时用 --tag v29.7.2 或 TAG=v29.7.2。
+TAG="${TAG:-}"
 # GitHub 加速前缀候选（按序尝试；ghproxy 类镜像仅代理 /releases/download/ 下载）
 DEFAULT_MIRRORS="ghfast.top gh-proxy.com ghproxy.net mirror.ghproxy.com gh-proxy.kejizero.xyz"
 # 国内网络默认加速站（自动检测命中国内时优先使用；可 --mirror 或环境变量 CHINA_MIRROR 覆盖）
@@ -88,13 +91,14 @@ FORCE="${FORCE:-0}"
 EXTRA_MIRRORS=""
 
 usage() {
-    sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,39p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --version) VERSION="${2#v}"; shift ;;
+        --tag) TAG="$2"; shift ;;
         --mirror) DOWNLOAD_MIRROR="$2"; shift ;;
         --registry-mirror) EXTRA_MIRRORS="$EXTRA_MIRRORS $2"; shift ;;
         --channel) CHANNEL="$2"; shift ;;
@@ -162,7 +166,14 @@ is_china_network() {
 # 下载 release 资产（多镜像自动探测）。$1=远端文件名 $2=本地路径 $3=超时秒
 download_release_file() {
     local name="$1" dst="$2" timeout="${3:-600}" url candidates
-    local release_url="https://github.com/$PROJECT/releases/download/$TAG/$name"
+    local release_base
+    if [ -n "$TAG" ]; then
+        release_base="https://github.com/$PROJECT/releases/download/$TAG"
+    else
+        # 不解析 API,直接用 GitHub 的 latest 重定向,避免限流
+        release_base="https://github.com/$PROJECT/releases/latest/download"
+    fi
+    local release_url="$release_base/$name"
     if [ -n "$DOWNLOAD_MIRROR" ]; then
         # 用户显式指定：只用该加速前缀
         candidates="$DOWNLOAD_MIRROR/$release_url"
@@ -578,7 +589,7 @@ print_summary() {
     echo
     echo "  - compose:  $(docker compose version 2>/dev/null | head -1 || echo '未安装')"
     echo "  - buildx:   $(docker buildx version 2>/dev/null | head -1 || echo '未安装')"
-    echo "  - 仓库:  $PROJECT (tag: $TAG)"
+    echo "  - 仓库:  $PROJECT (release: ${TAG:-latest})"
     if [ "$PKG_KIND" = "deb" ]; then
         echo "  - 发行版: ${lsb_dist} ${dist_version} / ${arch}"
     else

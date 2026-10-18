@@ -41,7 +41,8 @@ sh -c "$(curl -fsSL https://testingcf.jsdelivr.net/gh/MinimaxFlora/Docker_Privat
 
 | 参数 | 说明 |
 | --- | --- |
-| `--version <VERSION>` | 指定版本，如 `--version 29.7` 或 `--version 29.7.2` |
+| `--version <VERSION>` | 指定包版本，如 `--version 29.7` 或 `--version 29.7.2` |
+| `--tag <TAG>` | 指定 Release 标签（如 `v29.7.2`）；默认取最新版本化 Release |
 | `--mirror <URL>` | 指定 GitHub 加速前缀（覆盖默认；默认自动检测网络：国内优先 `gh-proxy.kejizero.xyz`，海外直连） |
 | `--registry-mirror <URL>` | 追加一个 docker 镜像加速地址（可重复） |
 | `--no-registry-mirror` | 跳过 registry 镜像加速配置 |
@@ -49,9 +50,19 @@ sh -c "$(curl -fsSL https://testingcf.jsdelivr.net/gh/MinimaxFlora/Docker_Privat
 | `--dry-run` | 只打印将要执行的步骤 |
 | `--help` | 帮助 |
 
-环境变量与参数等效：`VERSION`、`DOWNLOAD_MIRROR`、`CHINA_MIRROR`（国内默认加速站，默认
+环境变量与参数等效：`VERSION`、`TAG`、`DOWNLOAD_MIRROR`、`CHINA_MIRROR`（国内默认加速站，默认
 `https://gh-proxy.kejizero.xyz`）、`REGISTRY_MIRRORS`（逗号分隔）、`NO_AUTOSTART`、
-`NO_REGISTRY_MIRROR`、`PROJECT`、`TAG`。
+`NO_REGISTRY_MIRROR`、`PROJECT`。
+
+## Release 版本与更新
+
+每次同步成功都会创建一个**版本化 Release**，标签为 `v<docker-ce 版本>`（例如 `v29.7.2`）：
+
+- 默认安装**最新版本化 Release**：`install.sh` 使用 GitHub 的 `releases/latest/download` 重定向，
+  不需要解析 API，也不怕限流。
+- 需要固定或回滚到某个 Docker 版本时：`sudo bash install.sh --tag v29.7.2`。
+- 服务端只保留最近 3 个版本，避免仓库无限增长；旧版本 Release 会自动清理。
+- 不再维护滚动覆盖的 `latest` Release；`latest` 由 GitHub 自动指向最新版本化 Release。
 
 > 网络自动检测：脚本会先探测境外可达性（google / baidu），判定为国内网络时自动优先使用
 > `gh-proxy.kejizero.xyz` 加速站下载仓库包，其余镜像兜底；海外网络则直连 GitHub。
@@ -104,7 +115,7 @@ sudo bash install.sh --mirror https://ghfast.top --registry-mirror https://docke
 │  打包 docker-ce-repo-<codename>.tar / docker-ce-repo-rpm-<id>.tar + SHA256             │
 │       │                                                                               │
 │       ▼                                                                               │
-│  GitHub Release（固定 tag: latest，每次覆盖上传）── ghproxy 等镜像只代理 release 下载 ✓ │
+│  GitHub Release（版本化 tag: v<docker版本>，保留最近 3 个）── ghproxy 只代理 release 下载 ✓ │
 └───────────────────────────────────────────────────────────────────────────────────────┘
         │
         ▼  国内机器
@@ -142,8 +153,8 @@ sudo bash install.sh --mirror https://ghfast.top --registry-mirror https://docke
   Secrets 中 `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` 与仓库内 `public-key.asc` 出自同一次生成。
 - **下载慢 / 失败**：`--mirror https://你的加速前缀` 手动指定；加速站列表见脚本内
   `DEFAULT_MIRRORS`。
-- **想装旧版本**：仓库保留每包最近 3 个版本，`--version` 指定即可
-  （deb 如 `--version 27.3`，rpm 如 `--version 29.7`）。
+- **想装旧版本**：用 `--tag v29.7.2` 选择对应的版本化 Release，再用 `--version 29.7` 指定包版本
+  （仓库保留每包最近 3 个版本；deb 如 `--version 27.3`，rpm 如 `--version 29.7`）。
 - **registry 镜像失效**：镜像加速站时效性强，用 `--registry-mirror` 追加或直接编辑
   `/etc/docker/daemon.json` 后 `systemctl restart docker`。
 - **dnf 报依赖解析失败**：rpm 安装时 dnf 需要系统自带 base/AppStream 源可用来解析依赖

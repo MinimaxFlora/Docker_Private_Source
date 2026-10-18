@@ -48,7 +48,8 @@ The script will:
 
 | Option | Description |
 | --- | --- |
-| `--version <VERSION>` | Install a specific version, e.g. `--version 29.7` |
+| `--version <VERSION>` | Install a specific package version, e.g. `--version 29.7` |
+| `--tag <TAG>` | Select a versioned Release (e.g. `v29.7.2`); defaults to the newest versioned Release |
 | `--mirror <URL>` | Custom GitHub accelerator prefix (overrides default; auto-detects network: China prefers `gh-proxy.kejizero.xyz`, overseas uses direct) |
 | `--registry-mirror <URL>` | Append one more registry mirror (repeatable) |
 | `--no-registry-mirror` | Skip registry mirror configuration |
@@ -56,10 +57,22 @@ The script will:
 | `--dry-run` | Print steps only |
 | `--help` | Help |
 
-Environment variables work as equivalents: `VERSION`, `DOWNLOAD_MIRROR`,
+Environment variables work as equivalents: `VERSION`, `TAG`, `DOWNLOAD_MIRROR`,
 `CHINA_MIRROR` (default accelerator for China networks, defaults to
 `https://gh-proxy.kejizero.xyz`), `REGISTRY_MIRRORS` (comma-separated),
-`NO_AUTOSTART`, `NO_REGISTRY_MIRROR`, `PROJECT`, `TAG`.
+`NO_AUTOSTART`, `NO_REGISTRY_MIRROR`, `PROJECT`.
+
+## Versioned Releases
+
+Every successful sync publishes a versioned Release tagged `v<docker-ce version>`
+(for example `v29.7.2`):
+
+- The installer defaults to the newest versioned Release through GitHub's
+  `releases/latest/download` redirect (no API calls, no rate limits).
+- Pin or roll back with `sudo bash install.sh --tag v29.7.2`.
+- Only the three most recent versions are kept; older Releases are pruned.
+- The old rolling `latest` Release is no longer used; GitHub resolves `latest`
+  to the newest versioned Release.
 
 > Network auto-detection: the script probes overseas reachability (google/baidu)
 > and, when on a China network, automatically prefers the
@@ -105,7 +118,7 @@ Environment variables work as equivalents: `VERSION`, `DOWNLOAD_MIRROR`,
 │  package docker-ce-repo-<codename>.tar / docker-ce-repo-rpm-<id>.tar + SHA256         │
 │       │                                                                              │
 │       ▼                                                                              │
-│  GitHub Release (fixed tag: latest, overwritten each run) ── ghproxy proxies only    │
+│  GitHub Release (versioned tag: v<docker version>, last 6 kept) ── ghproxy ────────── │
 └──────────────────────────────────────────────────────────────────────────────────────┘
         │
         ▼  target machine (mainland China)
@@ -147,8 +160,8 @@ adds a SHA256 check on top.
   generation.
 - **Slow / failing download**: pass `--mirror https://your-accelerator`; the
   default list lives in `DEFAULT_MIRRORS` in the script.
-- **Older version**: the repo keeps the last 3 versions per package —
-  `--version 29.7` (rpm) / `--version 27.3` (deb) works.
+- **Older version**: choose a versioned Release with `--tag v29.7.2`, then pin the
+  package with `--version 29.7` (rpm) / `--version 27.3` (deb).
 - **dnf dependency resolution fails**: dnf resolves dependencies (e.g. for
   containerd) from the machine's own base/AppStream repos, so those must be
   configured and reachable.

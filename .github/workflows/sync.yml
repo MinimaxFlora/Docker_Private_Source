@@ -11,7 +11,7 @@ on:
         type: number
         default: 3
       run_target:
-        description: 运行目标（schedule 自动触发时全部运行）
+        description: 运行目标（schedule 自动触发时全部运行；只跑单项时不会发布 Release）
         required: false
         type: choice
         default: all
@@ -23,15 +23,48 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: sync-docker-ce
+  cancel-in-progress: false
+
 jobs:
+  prepare:
+    name: 解析 Docker 版本
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - name: 从官方 trixie 仓库读取 docker-ce 版本
+        id: resolve
+        run: |
+          set -euo pipefail
+          url="https://download.docker.com/linux/debian/dists/trixie/stable/binary-amd64/Packages.gz"
+          raw="$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 "$url" | gzip -dc | awk '
+            /^Package: docker-ce$/ { in_pkg=1; next }
+            in_pkg && /^Version: / { print $2; exit }
+            in_pkg && /^$/ { in_pkg=0 }
+          ')"
+          version="$(printf '%s' "$raw" | sed -E 's/^[0-9]+://' | grep -oE '^[0-9]+(\.[0-9]+)+' | head -1)"
+          if [ -z "$version" ]; then
+            echo "::error::无法解析 docker-ce 版本（上游返回: ${raw:-空}）"
+            exit 1
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "tag=v$version" >>"$GITHUB_OUTPUT"
+          echo "解析到 docker-ce=$raw -> v$version"
+
   sync-deb:
     name: deb-${{ matrix.codename }}
+    needs: prepare
     if: github.event.inputs.run_target != 'rpm'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         codename: [trixie, bookworm, bullseye, noble, jammy, focal]
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -59,25 +92,26 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: python3 sync-repo.py
 
-      - name: 上传 GitHub Release
+      - name: 上传到版本化 Release
         env:
           GH_TOKEN: ${{ github.token }}
+          CODENAME: ${{ matrix.codename }}
         run: |
           set -euo pipefail
-          CN="${{ matrix.codename }}"
-          # 固定 tag latest：URL 恒定，脚本无需探测版本
-          gh release create latest --repo "$GITHUB_REPOSITORY" \
-            --title "docker-ce-cn 仓库同步" \
-            --notes "自动同步 docker-ce 官方仓库（$CN），GPG 重签名" 2>/dev/null || true
-          # 先删后传：asset id 变化 → CDN 缓存 key 变化，客户端不会拿到旧包
-          gh release delete-asset latest "docker-ce-repo-$CN.tar" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh release delete-asset latest "docker-ce-repo-$CN.tar.sha256" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh release upload latest \
-            "docker-ce-repo-$CN.tar" "docker-ce-repo-$CN.tar.sha256" \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          asset="docker-ce-repo-${CODENAME}.tar"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "docker-ce-cn ${TAG}" \
+            --notes "版本化 Release，详细说明见发布完成后的 Release 说明" \
+            --latest=false 2>/dev/null || true
+          for a in "$asset" "$asset.sha256"; do
+            # 先删后传：asset id 变化 → CDN 缓存 key 变化，客户端不会拿到旧包
+            gh release delete-asset "$TAG" "$a" --repo "$GITHUB_REPOSITORY" -y >/dev/null 2>&1 || true
+            gh release upload "$TAG" "$a" --repo "$GITHUB_REPOSITORY" --clobber
+          done
 
   sync-rpm:
     name: rpm-${{ matrix.id }}
+    needs: prepare
     if: github.event.inputs.run_target != 'deb'
     runs-on: ubuntu-latest
     strategy:
@@ -91,6 +125,8 @@ jobs:
           - { distro: centos, version: "10", id: el10 }
           - { distro: fedora, version: "44", id: fedora-44 }
           - { distro: fedora, version: "43", id: fedora-43 }
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -119,21 +155,92 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: python3 sync-repo.py
 
-      - name: 上传 GitHub Release
+      - name: 上传到版本化 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ID: ${{ matrix.id }}
+        run: |
+          set -euo pipefail
+          asset="docker-ce-repo-rpm-${ID}.tar"
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "docker-ce-cn ${TAG}" \
+            --notes "版本化 Release，详细说明见发布完成后的 Release 说明" \
+            --latest=false 2>/dev/null || true
+          for a in "$asset" "$asset.sha256"; do
+            gh release delete-asset "$TAG" "$a" --repo "$GITHUB_REPOSITORY" -y >/dev/null 2>&1 || true
+            gh release upload "$TAG" "$a" --repo "$GITHUB_REPOSITORY" --clobber
+          done
+
+  publish:
+    name: 完成版本化 Release
+    needs: [prepare, sync-deb, sync-rpm]
+    # 只有 deb + rpm 全量同步成功时才收尾，避免发出缺资产的版本
+    if: needs.sync-deb.result == 'success' && needs.sync-rpm.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: 生成 Release 说明
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Docker CE ${TAG} · 国内仓库同步"
+            echo ""
+            echo "- 同步时间：$(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "- 官方 docker-ce 版本：\`${VERSION}\`"
+            echo "- 资产：deb（trixie/bookworm/bullseye/noble/jammy/focal）+ rpm（el7/el9/el10/fedora-43/fedora-44）"
+            echo "- GPG 重签名；SHA256 见同名 \`.sha256\` 文件"
+            echo ""
+            echo "安装（默认取本 Release）："
+            echo ""
+            echo '```bash'
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/raw/refs/heads/master/install.sh | sudo bash"
+            echo "# 固定版本："
+            echo "curl -fsSL https://github.com/${GITHUB_REPOSITORY}/raw/refs/heads/master/install.sh -o install.sh"
+            echo "sudo bash install.sh --tag ${TAG}"
+            echo '```'
+            echo ""
+            echo "---"
+            echo ""
+            cat RELEASE_NOTES.md
+          } > release-notes.md
+
+      - name: 标记为 Latest 并刷新说明
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "docker-ce-cn ${TAG}" --notes-file release-notes.md --latest
+
+      - name: 删除旧的滚动 latest Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          ID="${{ matrix.id }}"
-          gh release create latest --repo "$GITHUB_REPOSITORY" \
-            --title "docker-ce-cn 仓库同步" \
-            --notes "自动同步 docker-ce 官方仓库（rpm: $ID），GPG 重签名" 2>/dev/null || true
-          # 先删后传：asset id 变化 → CDN 缓存 key 变化，客户端不会拿到旧包
-          gh release delete-asset latest "docker-ce-repo-rpm-$ID.tar" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh release delete-asset latest "docker-ce-repo-rpm-$ID.tar.sha256" --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          gh release upload latest \
-            "docker-ce-repo-rpm-$ID.tar" "docker-ce-repo-rpm-$ID.tar.sha256" \
-            --repo "$GITHUB_REPOSITORY" --clobber
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" >/dev/null 2>&1; then
+            gh release delete latest --repo "$GITHUB_REPOSITORY" -y --cleanup-tag
+            echo "已删除旧的 latest Release（现在由版本化 Release 承担 latest 重定向）"
+          fi
+
+      - name: 只保留最近 3 个版本
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mapfile -t old < <(
+            gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName' \
+              | grep -E '^v[0-9]' | sort -Vr | tail -n +4
+          )
+          for tag in "${old[@]}"; do
+            [ -n "$tag" ] || continue
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" -y --cleanup-tag
+            echo "已清理旧版本：$tag"
+          done
 
   cleanup:
     name: 清理历史运行记录
@@ -141,7 +248,6 @@ jobs:
     if: always()
     needs: [sync-deb, sync-rpm]
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -161,10 +267,3 @@ jobs:
             fi
           done
           echo "清理完成：删除 $deleted 个历史 run（保留当前 run）"
-
-      - name: 刷新 Release 说明
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release edit latest --repo "$GITHUB_REPOSITORY" \
-            --notes-file RELEASE_NOTES.md

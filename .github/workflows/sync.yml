@@ -42,7 +42,7 @@ jobs:
           url="https://download.docker.com/linux/debian/dists/trixie/stable/binary-amd64/Packages.gz"
           raw="$(curl -fsSL --retry 3 --retry-all-errors --max-time 60 "$url" | gzip -dc | awk '
             /^Package: docker-ce$/ { in_pkg=1; next }
-            in_pkg && /^Version: / { print $2; exit }
+            in_pkg && /^Version: / && !found { print $2; found=1 }
             in_pkg && /^$/ { in_pkg=0 }
           ')"
           version="$(printf '%s' "$raw" | sed -E 's/^[0-9]+://' | grep -oE '^[0-9]+(\.[0-9]+)+' | head -1)"

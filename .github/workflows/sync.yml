@@ -100,7 +100,7 @@ jobs:
           set -euo pipefail
           asset="docker-ce-repo-${CODENAME}.tar"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --title "docker-ce-cn ${TAG}" \
+            --title "${TAG}" \
             --notes "版本化 Release，详细说明见发布完成后的 Release 说明" \
             --latest=false 2>/dev/null || true
           for a in "$asset" "$asset.sha256"; do
@@ -163,7 +163,7 @@ jobs:
           set -euo pipefail
           asset="docker-ce-repo-rpm-${ID}.tar"
           gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --title "docker-ce-cn ${TAG}" \
+            --title "${TAG}" \
             --notes "版本化 Release，详细说明见发布完成后的 Release 说明" \
             --latest=false 2>/dev/null || true
           for a in "$asset" "$asset.sha256"; do
@@ -215,7 +215,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --title "docker-ce-cn ${TAG}" --notes-file release-notes.md --latest
+            --title "${TAG}" --notes-file release-notes.md --latest
 
       - name: 删除旧的滚动 latest Release
         env:
